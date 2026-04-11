@@ -18,6 +18,8 @@
 
 **Languages:** Each exercise is implemented in both Python (`exercise_N.py`) and TypeScript (`exercise_N.ts`).
 
+> **Context management note:** Exam Scenario 6 (*Structured Data Extraction*) lists **Context Management & Reliability** as a co-primary domain alongside Domain 3. In extraction pipelines, context management failures look like this: a document is too long to fit in one call, so it is split — but the split loses a fact that spans two chunks, and the model extracts contradictory values from each half. Exercises 4 and 5 this week touch this boundary: a retry loop that exhausts without resolving is also a context degradation signal.
+
 ---
 
 ## Exercises

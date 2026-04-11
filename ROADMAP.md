@@ -62,10 +62,11 @@ Every domain in this roadmap is grounded in a realistic engineering failure. The
 Key topics:
 - Agentic loops and `stop_reason` handling — never parse natural language for loop termination
 - Multi-agent orchestration: coordinator + subagent patterns, hub-and-spoke models
-- Agent SDK: session management, task decomposition
+- **Claude Agent SDK** — session management, tool registration, agent lifecycle hooks (used in Scenarios 1, 3, and 4 by name)
 - Hooks for programmatic guardrails — not prompt-based rule enforcement
 - Fallback loop design and error recovery strategies
 - Escalation: task-complexity criteria, not sentiment analysis
+- Scenario 1 MCP tool names to know: `get_customer`, `lookup_order`, `process_refund`, `escalate_to_human`
 
 ---
 
@@ -115,11 +116,13 @@ Key topics:
 - Never suppress errors silently — distinguish failure from absence
 - MCP server design and configuration
 - Tool boundary management — structural constraints prevent wrong tool calls
-- Claude's built-in tools
+- **Claude Code's five built-in tools** (Scenario 4): `Read`, `Write`, `Bash`, `Grep`, `Glob` — know what each does and when a custom MCP tool is required instead
 
 ---
 
 ### Domain 5 — Context Management & Reliability (15%)
+
+> **Cross-cutting warning:** Despite carrying the lowest weight (15%), Context Management & Reliability appears as a **co-primary domain in 4 of 6 exam scenarios** (Scenarios 1, 2, 3, and 6). Exam questions in those scenarios will test context management even when you are answering about agentic architecture, Claude Code, or structured extraction. Do not treat this as a standalone topic — it is woven into every other domain.
 
 > **Business context — Resolve, 1,200 enterprise customers**
 > Enterprise tickets run 40–80 messages deep across multiple agents and weeks. When Resolve's AI takes over a long thread, it contradicts itself by turn thirty. It confirms a refund is processing, then fifteen messages later asks for the information needed to start one. It applies the correct account tier discount, then later calculates pricing as if the customer is on the default plan. The system prompt is at the top. By the time the model generates turn thirty, it is paying more attention to the recent conversation than to the instructions from the beginning.

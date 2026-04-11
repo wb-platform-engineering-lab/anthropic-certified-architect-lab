@@ -9,6 +9,7 @@
 - Model session state as an explicit data structure, not as implicit conversation history
 - Decompose complex tasks into bounded sub-tasks with defined completion criteria
 - Handle every possible `stop_reason` value explicitly, including unexpected ones
+- Understand what the Claude Agent SDK provides on top of the raw API — and when to use each
 
 ## Prerequisites
 
@@ -17,6 +18,8 @@
 - `.env` with `ANTHROPIC_API_KEY`
 
 **Languages:** Each exercise is implemented in both Python (`exercise_N.py`) and TypeScript (`exercise_N.ts`).
+
+> **Agent SDK note:** Exam Scenarios 1, 3, and 4 explicitly reference the **Claude Agent SDK**, not the raw `anthropic` client. The SDK provides higher-level abstractions for session management, tool registration, and agent loops. Exercise 6 this week introduces the SDK. Raw API exercises (1–5) remain essential because the exam tests both layers.
 
 ---
 
@@ -103,6 +106,23 @@
 
 ---
 
+### Exercise 6 — The Claude Agent SDK
+
+**Goal:** Understand what the Agent SDK provides on top of the raw API and rebuild the Resolve loop using it — this is the layer the exam's Scenario 1, 3, and 4 questions assume you know.
+
+**Scenario:** Jade's original agent used raw `anthropic.messages.create` calls with a hand-rolled loop. The Agent SDK provides session management, built-in tool registration, and agent lifecycle hooks as first-class primitives — reducing boilerplate and making the loop's structure explicit.
+
+**You will:**
+1. Install the Agent SDK (`pip install anthropic[agent]` / `npm install @anthropic-ai/sdk`) and understand how it differs from the base client
+2. Rewrite the ticket resolution loop from Exercise 1 using the Agent SDK's `Agent` class — observe which parts of your hand-rolled loop the SDK replaces
+3. Register the Resolve MCP tools (`get_customer`, `lookup_order`, `process_refund`, `escalate_to_human`) using the SDK's tool registration pattern — these are the exact tool names used in the official Scenario 1
+4. Implement session management using the SDK's built-in session primitives — compare how session state is handled vs. the manual `SessionState` dataclass from Exercise 3
+5. Verify that the SDK's agent loop still terminates on `stop_reason` — confirm the SDK does not change the underlying termination contract
+
+**Key insight:** The Agent SDK does not change what the exam tests about loop termination, session state, or escalation logic — it changes how you implement them. Exam questions describe Agent SDK patterns; knowing the raw API layer is what lets you reason about *why* those patterns are correct.
+
+---
+
 ## Lab Completion Checklist
 
 Before moving to Week 3, answer these without looking:
@@ -113,6 +133,7 @@ Before moving to Week 3, answer these without looking:
 - [ ] What is the difference between `iteration_count` in session state and `len(messages)` in message history?
 - [ ] Give two examples of task completion criteria the code can evaluate without asking the model
 - [ ] Why should sentiment-based escalation logic fail on the exam?
+- [ ] Name two things the Agent SDK handles that you had to implement manually in Exercises 1–5
 
 ---
 
@@ -125,6 +146,7 @@ Before moving to Week 3, answer these without looking:
 | 3 | D1, D5 | Session state as explicit structure; preventing redundant tool calls |
 | 4 | D1 | Task decomposition; bounded sub-tasks; completion criteria in code |
 | 5 | D1 | Escalation: complexity-based vs. sentiment-based |
+| 6 | D1 | Agent SDK vs. raw API; session management; Scenario 1/3/4 tool names |
 
 ---
 

@@ -19,6 +19,8 @@
 
 **Note:** Domain 2 is the most configuration-dependent domain on the exam. The questions test whether you know exactly where files go, what each level of the hierarchy controls, and what non-interactive mode changes about Claude Code's behaviour. There is no shortcut — you need to have configured a real project.
 
+> **Context management note:** Exam Scenario 2 (*Code Generation with Claude Code*) lists **Context Management & Reliability** as a co-primary domain alongside Domain 2. A CLAUDE.md hierarchy is itself a context management tool — it defines what Claude Code knows about the project before any conversation starts. As you build exercises this week, consider each CLAUDE.md instruction as context you are pinning for Claude Code's attention, not just documentation for human readers.
+
 ---
 
 ## Exercises

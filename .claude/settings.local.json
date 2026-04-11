@@ -4,7 +4,11 @@
       "WebSearch",
       "WebFetch(domain:claudecertifications.com)",
       "WebFetch(domain:anthropic.skilljar.com)",
-      "WebFetch(domain:dev.to)"
+      "WebFetch(domain:dev.to)",
+      "Bash(git remote:*)",
+      "Bash(git push:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }

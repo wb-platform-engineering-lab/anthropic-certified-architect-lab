@@ -88,19 +88,25 @@
 
 ---
 
-### Exercise 5 — Claude's Built-In Tools
+### Exercise 5 — Claude Code's Five Built-In Tools (Scenario 4)
 
-**Goal:** Understand which tools Claude has natively and when to use them instead of defining custom tools.
+**Goal:** Know the five Claude Code built-in tools by name, understand exactly what each does, and decide when to use them versus a custom MCP tool.
 
-**Scenario:** Resolve's early codebase defined a custom `search_web` tool that called the Brave Search API. Marcus noticed during a code review that Claude Code already has a built-in web search capability. The custom tool was redundant and introduced an additional API key to manage.
+**Scenario:** Exam Scenario 4 (*Developer Productivity with Claude*) explicitly names five built-in tools: `Read`, `Write`, `Bash`, `Grep`, `Glob`. An engineer building a codebase exploration agent must know when each is the right choice and when a private data source requires a custom MCP tool instead. Getting this wrong costs marks on every question in that scenario.
 
 **You will:**
-1. Identify the three categories of built-in Claude tools: computer use tools, web search, and code execution — understand the scope of each
-2. Compare a custom `read_file` tool definition against using Claude Code's built-in file reading capability — when is the custom definition needed?
-3. Build a scenario where a built-in tool is the correct choice (web search for a knowledge base question that is genuinely external) and one where a custom MCP tool is required (looking up a customer record in Resolve's private CRM)
-4. Understand the trust model: built-in tools have Anthropic-defined safety constraints; custom tools do not inherit these constraints — the developer is responsible for safe tool behaviour
+1. Map each built-in tool to its exact capability and constraints:
+   - `Read` — reads a file at a given path; respects `.claudeignore`; does not authenticate to external systems
+   - `Write` — writes or overwrites a file; creates directories as needed; does not commit to version control
+   - `Bash` — runs a shell command and returns stdout/stderr; scoped to the project directory by default
+   - `Grep` — searches file contents for a pattern; faster than running `grep` via `Bash` for large codebases
+   - `Glob` — finds files matching a pattern (e.g. `**/*.ts`); returns sorted paths; does not read file contents
+2. Build a codebase exploration agent for Scenario 4 that uses all five: `Glob` to find TypeScript files, `Read` to inspect them, `Grep` to find usages of a function, `Bash` to run the test suite, `Write` to generate a summary report
+3. Identify which tasks in Scenario 4 require a custom MCP tool instead of a built-in: (a) reading a file from a private S3 bucket, (b) querying an internal database, (c) calling an authenticated internal API
+4. Verify the naming conflict rule: define a custom tool named `Read` and confirm it overrides the built-in — understand why this is a source of silent bugs in codebases that define generic tool names
+5. Understand the trust boundary: built-in tools operate within Anthropic-defined constraints (e.g. `Bash` prompts for confirmation on destructive commands); custom MCP tools have no inherited safety constraints — the developer owns all validation
 
-**Key insight:** Built-in tools are available in Claude Code but not in direct API calls unless explicitly enabled. If you define a tool with the same name as a built-in, the custom definition takes precedence. This is the source of subtle bugs when naming custom tools.
+**Key insight:** `Read`, `Write`, `Bash`, `Grep`, `Glob` are Claude Code built-ins — not general API tools. They are available when using Claude Code; they are not automatically available in a direct API call or Agent SDK session unless explicitly registered. The exam tests whether you know this boundary.
 
 ---
 
@@ -113,7 +119,9 @@ Before moving to Week 7, answer these without looking:
 - [ ] What does `stdio` transport mean in MCP? When would you use `SSE` instead?
 - [ ] Where does Claude Code look for MCP server configuration?
 - [ ] Why is a thrown exception a worse tool error than a typed `access_failure` response?
-- [ ] Name one scenario where using Claude's built-in tools is correct and one where a custom MCP tool is required
+- [ ] Name the five Claude Code built-in tools and one sentence on what each does
+- [ ] Name two tasks from Scenario 4 that require a custom MCP tool rather than a built-in
+- [ ] What happens when a custom tool is defined with the same name as a built-in?
 
 ---
 
