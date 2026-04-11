@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:claudecertifications.com)",
+      "WebFetch(domain:anthropic.skilljar.com)",
+      "WebFetch(domain:dev.to)"
+    ]
+  }
+}
