@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Week 1 Quiz — API Foundations</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8fafc; color: #0f172a; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; }
+    .progress-bar-wrap { position: fixed; top: 0; left: 0; right: 0; height: 4px; background: #e2e8f0; z-index: 100; }
+    .progress-bar { height: 100%; background: linear-gradient(90deg, #f59e0b, #fbbf24); transition: width 0.4s ease; }
+    .header { position: fixed; top: 12px; right: 20px; font-size: 13px; color: #94a3b8; z-index: 100; }
+    .card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 48px; max-width: 680px; width: 100%; box-shadow: 0 4px 24px rgba(0,0,0,0.06); animation: fadeUp 0.35s ease; }
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+    .phase-label { font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #f59e0b; margin-bottom: 12px; }
+    .question { font-size: 20px; font-weight: 600; line-height: 1.5; color: #0f172a; margin-bottom: 32px; }
+    .question code { background: #fef3c7; color: #92400e; padding: 2px 7px; border-radius: 5px; font-size: 15px; font-family: 'SF Mono', 'Fira Code', monospace; }
+    .options { display: flex; flex-direction: column; gap: 12px; }
+    .option { display: flex; align-items: flex-start; gap: 14px; padding: 16px 18px; background: #f8fafc; border: 1.5px solid #e2e8f0; border-radius: 10px; cursor: pointer; transition: border-color 0.15s, background 0.15s, transform 0.1s; user-select: none; }
+    .option:hover:not(.disabled) { border-color: #f59e0b; background: #fffbeb; transform: translateX(3px); }
+    .option-key { width: 28px; height: 28px; min-width: 28px; border: 1.5px solid #cbd5e1; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #64748b; transition: all 0.15s; }
+    .option-text { font-size: 15px; line-height: 1.5; color: #334155; padding-top: 3px; }
+    .option-text code { background: #fef3c7; color: #92400e; padding: 1px 6px; border-radius: 4px; font-size: 13px; font-family: 'SF Mono', 'Fira Code', monospace; }
+    .option.correct { border-color: #22c55e; background: #f0fdf4; }
+    .option.correct .option-key { background: #22c55e; border-color: #22c55e; color: #fff; }
+    .option.correct .option-text { color: #166534; }
+    .option.wrong { border-color: #ef4444; background: #fef2f2; }
+    .option.wrong .option-key { background: #ef4444; border-color: #ef4444; color: #fff; }
+    .option.wrong .option-text { color: #991b1b; }
+    .option.dimmed { opacity: 0.35; }
+    .option.disabled { cursor: default; }
+    .explanation { margin-top: 20px; padding: 16px 18px; background: #f8fafc; border-left: 3px solid #f59e0b; border-radius: 0 8px 8px 0; font-size: 14px; line-height: 1.65; color: #475569; animation: fadeUp 0.25s ease; }
+    .explanation code { background: #fef3c7; color: #92400e; padding: 1px 6px; border-radius: 4px; font-size: 13px; font-family: 'SF Mono', 'Fira Code', monospace; }
+    .btn-next { margin-top: 28px; padding: 14px 32px; background: #f59e0b; color: #fff; font-size: 15px; font-weight: 600; border: none; border-radius: 10px; cursor: pointer; transition: background 0.15s, transform 0.1s; width: 100%; }
+    .btn-next:hover { background: #d97706; transform: translateY(-1px); }
+    .score-screen { text-align: center; }
+    .score-circle { width: 120px; height: 120px; border-radius: 50%; background: linear-gradient(135deg, #f59e0b, #fbbf24); display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 0 auto 28px; }
+    .score-number { font-size: 36px; font-weight: 800; color: #fff; line-height: 1; }
+    .score-total { font-size: 14px; color: rgba(255,255,255,0.8); margin-top: 2px; }
+    .score-title { font-size: 24px; font-weight: 700; color: #0f172a; margin-bottom: 10px; }
+    .score-subtitle { font-size: 15px; color: #64748b; margin-bottom: 32px; line-height: 1.6; }
+    .score-breakdown { display: flex; gap: 12px; justify-content: center; margin-bottom: 32px; flex-wrap: wrap; }
+    .score-tag { padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; }
+    .score-tag.correct { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
+    .score-tag.wrong   { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+    .btn-restart { padding: 14px 40px; background: transparent; color: #f59e0b; font-size: 15px; font-weight: 600; border: 1.5px solid #f59e0b; border-radius: 10px; cursor: pointer; transition: background 0.15s; margin-right: 12px; }
+    .btn-restart:hover { background: #fffbeb; }
+    .btn-back { padding: 14px 40px; background: #f59e0b; color: #fff; font-size: 15px; font-weight: 600; border: none; border-radius: 10px; cursor: pointer; transition: background 0.15s; text-decoration: none; display: inline-block; }
+    .btn-back:hover { background: #d97706; }
+  </style>
+</head>
+<body>
+<div class="progress-bar-wrap"><div class="progress-bar" id="progressBar" style="width: 0%"></div></div>
+<div class="header" id="questionCounter"></div>
+<div class="card" id="quizCard"></div>
+<script>
+const questions = [
+  {
+    q: "Resolve's resolution agent calls the Claude API and receives a response. The <code>stop_reason</code> field is <code>max_tokens</code>. What should the agentic loop do?",
+    options: [
+      "Treat it as a successful completion — the model finished generating its response",
+      "Retry the same call with a larger <code>max_tokens</code> value automatically",
+      "Treat it as an incomplete response and escalate — the model's output was cut off before it finished",
+      "Check the response text for a complete sentence to decide whether to continue"
+    ],
+    correct: 2,
+    explanation: "<code>max_tokens</code> means the model was still generating when the token budget ran out — it did not decide to stop. The output is incomplete. The correct action is to treat this as a failure state and escalate, not to silently continue. A loop that treats <code>max_tokens</code> the same as <code>end_turn</code> will pass truncated, incomplete outputs downstream."
+  },
+  {
+    q: "After the model returns a <code>tool_use</code> block, what is the correct structure of the next message you must add to the conversation history?",
+    options: [
+      "A <code>user</code> message containing a <code>tool_result</code> content block with the tool's output",
+      "An <code>assistant</code> message containing the tool's output as a text block",
+      "A <code>user</code> message containing a plain text description of what the tool returned",
+      "A <code>system</code> message updating the assistant with the tool result"
+    ],
+    correct: 0,
+    explanation: "The message history after a tool call must follow this exact structure: the <code>assistant</code> turn contains the <code>tool_use</code> block; the next <code>user</code> turn contains a <code>tool_result</code> content block with the matching <code>tool_use_id</code> and the tool's output. Any other structure causes an API error or silent misbehaviour."
+  },
+  {
+    q: "Resolve's ticket classifier was built by adding <em>\"Always respond with a JSON object\"</em> to the system prompt. A system prompt update causes it to start returning plain text explanations instead of JSON, breaking the routing system. What is the architectural fix?",
+    options: [
+      "Add more explicit JSON formatting instructions to the system prompt and include a few-shot example",
+      "Use <code>tool_choice: {\"type\": \"tool\", \"name\": \"classify_ticket\"}</code> to force a <code>tool_use</code> response — the schema is enforced by the API",
+      "Add a post-processing step that strips markdown and attempts to parse any JSON found in the text",
+      "Switch to a larger model — smaller models are less reliable at following JSON formatting instructions"
+    ],
+    correct: 1,
+    explanation: "Asking the model for JSON in the system prompt is a request, not a constraint. The model can comply in ways that break parsers (markdown code blocks, preamble sentences) or stop complying after a prompt update. <code>tool_choice</code> with a specific tool name forces a <code>tool_use</code> response — the API enforces the schema. No amount of prompt engineering produces the same guarantee."
+  },
+  {
+    q: "An agentic loop is processing a ticket and has no <code>max_iterations</code> guard. The knowledge base search returns empty results. The model decides it needs more context and calls the same search tool again with slightly different wording. What happens?",
+    options: [
+      "The loop terminates after 3 retries — the API enforces a per-session tool call limit",
+      "The loop continues indefinitely until the API rate limiter intervenes, accumulating thousands of tool calls and API costs",
+      "The model recognises the repeated empty result and exits with <code>stop_reason: end_turn</code>",
+      "The API returns a <code>loop_detected</code> error after 10 identical tool calls"
+    ],
+    correct: 1,
+    explanation: "Without a programmatic iteration budget, the loop has no floor. The model will keep calling tools as long as it believes more information is needed — and an empty result from a search does not tell it to stop trying. There is no API-level loop detection. This is the exact failure that cost Resolve $11,400 overnight: one ticket, 14,000 tool calls, no <code>max_iterations</code> guard."
+  },
+  {
+    q: "Resolve's <code>get_account_status</code> tool returns <code>{}</code> when the CRM API times out. The model receives this response, interprets it as \"no account data found,\" and tells the customer their account looks fine. What is the correct tool return value for a CRM timeout?",
+    options: [
+      "<code>null</code> — a null value signals to the model that the lookup failed",
+      "<code>{\"error\": true}</code> — a boolean error flag is sufficient",
+      "<code>{\"status\": \"access_failure\", \"code\": \"CRM_TIMEOUT\", \"message\": \"CRM unavailable — do not proceed with billing decisions\"}</code>",
+      "Raise an exception — the model will receive an error message and handle it appropriately"
+    ],
+    correct: 2,
+    explanation: "The model cannot distinguish <code>{}</code> (timeout) from <code>{}</code> (customer not found). Both look like empty data. A typed <code>access_failure</code> response with a <code>status</code> field, an error code, and an explicit instruction gives the model the context it needs to escalate instead of guessing. The tool description should define all three response shapes: success, access_failure, and empty result."
+  },
+  {
+    q: "What does <code>tool_choice: {\"type\": \"auto\"}</code> mean, and when is it the wrong choice for a production classification pipeline?",
+    options: [
+      "It means the model selects which tool to call — wrong for classification because the model may decide no tool is needed and return plain text instead",
+      "It means the API automatically selects the best tool based on the input — wrong because it bypasses the developer's tool definitions",
+      "It means all tools are disabled — wrong because the model cannot call any tools",
+      "It means the model calls all available tools in parallel — wrong because it creates redundant API calls"
+    ],
+    correct: 0,
+    explanation: "With <code>tool_choice: auto</code>, the model decides whether to call a tool at all. For a ticket with a very short, obvious query, the model may choose to answer in plain text and skip the classification tool entirely. In a pipeline where every ticket must produce a structured <code>classify_ticket</code> output, this is a silent failure. Use <code>{\"type\": \"tool\", \"name\": \"classify_ticket\"}</code> to make the call mandatory."
+  },
+  {
+    q: "A <code>tool_result</code> block has <code>is_error: true</code> set. What effect does this have on the model's next response?",
+    options: [
+      "The API rejects the message and returns a 400 error",
+      "The model ignores the tool result and uses its prior knowledge instead",
+      "The model is informed that the tool call failed — it can use the error content to understand what went wrong and decide how to proceed",
+      "The model automatically retries the same tool call with the same parameters"
+    ],
+    correct: 2,
+    explanation: "<code>is_error: true</code> signals to the model that the tool execution failed. The <code>content</code> field of the tool result becomes the error message the model reasons about. If the content includes a specific validation error (e.g. \"confidence score 0.12 is below the 0.6 threshold for auto_resolve\"), the model can correct the specific field on the next attempt. A generic error message produces generic corrections."
+  },
+  {
+    q: "Resolve's ticket schema has a <code>decision</code> field defined as <code>\"type\": \"string\"</code>. The model sometimes returns <code>\"auto_resolve\"</code>, sometimes <code>\"auto-resolve\"</code>, and sometimes <code>\"resolve automatically\"</code>. What schema change eliminates this variability?",
+    options: [
+      "Add a <code>description</code> field to the property specifying the exact allowed values",
+      "Change <code>\"type\": \"string\"</code> to <code>\"type\": \"string\", \"enum\": [\"auto_resolve\", \"escalate\"]</code>",
+      "Add a few-shot example showing the correct format in the system prompt",
+      "Set <code>\"maxLength\": 12</code> to constrain the field to short values"
+    ],
+    correct: 1,
+    explanation: "An <code>enum</code> constraint in the JSON schema restricts the field to exactly the specified values. The model cannot return <code>\"auto-resolve\"</code> or <code>\"resolve automatically\"</code> — only the enum members are valid. This eliminates an entire class of variability that no amount of prompt engineering can fully prevent. Use <code>enum</code> for any field with a finite, known set of valid values."
+  },
+  {
+    q: "Which of the following correctly describes the four values <code>stop_reason</code> can take in a standard Claude API response?",
+    options: [
+      "<code>end_turn</code>, <code>tool_use</code>, <code>max_tokens</code>, <code>stop_sequence</code>",
+      "<code>complete</code>, <code>tool_call</code>, <code>truncated</code>, <code>error</code>",
+      "<code>finished</code>, <code>function_call</code>, <code>length</code>, <code>content_filter</code>",
+      "<code>end_turn</code>, <code>tool_use</code>, <code>max_tokens</code>, <code>loop_detected</code>"
+    ],
+    correct: 0,
+    explanation: "The four <code>stop_reason</code> values are: <code>end_turn</code> (model finished naturally), <code>tool_use</code> (model wants to call a tool — loop must continue), <code>max_tokens</code> (output was cut off — treat as incomplete), and <code>stop_sequence</code> (a configured stop string was encountered). There is no <code>loop_detected</code> or <code>error</code> stop reason — API errors are returned as HTTP error codes, not as stop reasons."
+  },
+  {
+    q: "You are building the Resolve validation-retry loop. After three failed validation attempts, the loop should:",
+    options: [
+      "Return the last invalid classification anyway — three attempts is sufficient due diligence",
+      "Increase <code>max_tokens</code> and try a fourth time — the failures may be caused by a truncated response",
+      "Return a typed <code>{\"status\": \"escalation\", \"reason\": \"validation_exhausted\"}</code> and route the ticket to human review",
+      "Switch to a different model for the fourth attempt — model variation may produce a valid output"
+    ],
+    correct: 2,
+    explanation: "An exhausted retry loop must escalate with a typed exit — never silently succeed with an invalid result. Returning the last invalid classification would pass bad data downstream. Trying a fourth time or switching models treats the symptom, not the cause, and produces unpredictable latency. The typed <code>validation_exhausted</code> exit gives the calling system the information it needs to route the ticket to a human queue with a clear reason."
+  }
+];
+
+let current = 0, score = 0, answered = false;
+const results = [];
+
+function render() {
+  const card = document.getElementById('quizCard');
+  const bar  = document.getElementById('progressBar');
+  const counter = document.getElementById('questionCounter');
+  if (current >= questions.length) { renderScore(); return; }
+  const q = questions[current];
+  answered = false;
+  bar.style.width = `${(current / questions.length) * 100}%`;
+  counter.textContent = `${current + 1} / ${questions.length}`;
+  card.innerHTML = `
+    <div class="phase-label">Week 1 · API Foundations</div>
+    <div class="question">${q.q}</div>
+    <div class="options" id="options">
+      ${q.options.map((opt, i) => `
+        <div class="option" data-index="${i}" onclick="select(${i})">
+          <div class="option-key">${String.fromCharCode(65 + i)}</div>
+          <div class="option-text">${opt}</div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function select(chosen) {
+  if (answered) return;
+  answered = true;
+  const q = questions[current];
+  const options = document.querySelectorAll('.option');
+  options.forEach((el, i) => {
+    el.classList.add('disabled');
+    if (i === q.correct) el.classList.add('correct');
+    else if (i === chosen) el.classList.add('wrong');
+    else el.classList.add('dimmed');
+  });
+  const isCorrect = chosen === q.correct;
+  if (isCorrect) score++;
+  results.push(isCorrect);
+  const exp = document.createElement('div');
+  exp.className = 'explanation';
+  exp.innerHTML = (isCorrect ? '✓ Correct. ' : '✗ Not quite. ') + q.explanation;
+  document.getElementById('options').after(exp);
+  const btn = document.createElement('button');
+  btn.className = 'btn-next';
+  btn.textContent = current < questions.length - 1 ? 'Next question →' : 'See my results';
+  btn.onclick = () => { current++; render(); };
+  exp.after(btn);
+}
+
+function renderScore() {
+  const card = document.getElementById('quizCard');
+  document.getElementById('progressBar').style.width = '100%';
+  document.getElementById('questionCounter').textContent = '';
+  const pct = Math.round((score / questions.length) * 100);
+  let msg, sub;
+  if (pct === 100) { msg = 'Perfect score.'; sub = 'Every pattern from Week 1 is solid. Move to Week 2.'; }
+  else if (pct >= 80) { msg = 'Strong foundation.'; sub = 'Review the questions you missed — the exam uses the same traps.'; }
+  else if (pct >= 60) { msg = 'Getting there.'; sub = 'Re-do the Week 1 exercises, especially Exercises 2 and 5. Then retry.'; }
+  else { msg = 'Keep studying.'; sub = 'Go back through the Week 1 lab before moving on. These patterns appear in every domain.'; }
+  const wrongCount = questions.length - score;
+  card.innerHTML = `
+    <div class="score-screen">
+      <div class="score-circle">
+        <div class="score-number">${score}</div>
+        <div class="score-total">/ ${questions.length}</div>
+      </div>
+      <div class="score-title">${msg}</div>
+      <div class="score-subtitle">${sub}</div>
+      <div class="score-breakdown">
+        <span class="score-tag correct">✓ ${score} correct</span>
+        <span class="score-tag wrong">✗ ${wrongCount} wrong</span>
+      </div>
+      <button class="btn-restart" onclick="restart()">Try again</button>
+      <a class="btn-back" href="./README.md">Back to lab</a>
+    </div>
+  `;
+}
+
+function restart() { current = 0; score = 0; answered = false; results.length = 0; render(); }
+render();
+</script>
+</body>
+</html>
