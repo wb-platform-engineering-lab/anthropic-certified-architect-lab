@@ -90,19 +90,29 @@
 
 ---
 
-### Exercise 5 — Escalation as a First-Class Exit
+### Exercise 5 — Escalation: Boundary Clarity vs. Structural Enforcement
 
-**Goal:** Implement escalation as a typed, deliberate exit — not a fallback for when everything else fails.
+**Goal:** Understand the two distinct escalation problems the exam tests — and apply the correct fix to each. Conflating them is one of the most common ways to lose marks on Scenario 1 questions.
 
-**Scenario:** After the Chapter 1 incident, Resolve rebuilt escalation logic around task complexity criteria. This exercise implements that logic and contrasts it with sentiment-based escalation.
+**The distinction the exam makes:**
+
+| Problem | Root cause | Correct fix |
+|---|---|---|
+| Agent escalates wrong cases — boundaries unclear | The agent doesn't know *what* meets the escalation threshold | Explicit criteria + few-shot examples in the system prompt |
+| Agent knows the rule but skips it | Probabilistic compliance with a known rule | Programmatic hook that enforces the rule structurally |
+
+**Scenario A — Boundary clarity problem:** Resolve's agent achieves 55% first-contact resolution. Logs show it escalates straightforward damage replacements while autonomously attempting complex policy exceptions. The agent is not ignoring a rule — it genuinely cannot distinguish the cases. This is a decision boundary problem.
+
+**Scenario B — Structural enforcement problem:** Resolve's agent occasionally calls `process_refund` before `get_customer` has returned a verified ID, leading to misidentified refunds. The agent "knows" verification should come first (it is in the system prompt) but probabilistically skips it.
 
 **You will:**
-1. Implement two escalation strategies: sentiment-based (detect frustration in ticket text) and complexity-based (ticket type + unresolved prior contacts + account tier)
-2. Run both strategies on the same 10 seeded tickets and compare escalation rates
-3. Identify at least 2 tickets where sentiment-based escalation fires incorrectly (false positive or false negative)
-4. Implement the complexity-based strategy as a pure function with no model calls — it is deterministic code, not AI judgment
+1. Implement the wrong fix for Scenario A: add a programmatic complexity score threshold. Run on 10 tickets. Observe that the threshold fires incorrectly because the *criteria* are still unclear — the code enforces the wrong boundary.
+2. Implement the correct fix for Scenario A: add explicit escalation criteria with 3 few-shot examples (one clear escalation, one clear resolution, one genuine boundary case with reasoning). Measure improvement.
+3. Implement the wrong fix for Scenario B: add more explicit instructions to the system prompt. Verify that even with strong prompt instructions, the skip occasionally recurs.
+4. Implement the correct fix for Scenario B: a pre-call hook that raises a `ToolOrderViolation` if `process_refund` or `lookup_order` is called before `get_customer` has returned a verified ID this session.
+5. Confirm the rule: **when the agent doesn't know what to do → fix the prompt; when the agent knows but doesn't reliably do it → fix the code.**
 
-**Key insight:** Escalation logic that depends on a model call introduces a second layer of uncertainty. Complexity-based criteria can be tested, audited, and explained. Sentiment-based criteria cannot.
+**Key insight:** Sentiment analysis is always wrong (it measures the wrong thing). Self-reported model confidence is always wrong (LLMs are poorly calibrated). A separate classifier is over-engineered as a first step. The exam's Scenario 1 Q3 answer is *few-shot examples with explicit criteria* — because the root cause is unclear decision boundaries, not structural non-compliance. Do not confuse the two problems.
 
 ---
 

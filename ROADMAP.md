@@ -211,10 +211,12 @@ All courses at: https://anthropic.skilljar.com
 - [ ] Complete **Claude Code 101** (Skilljar)
 - [ ] Complete **Claude Code in Action** (Skilljar)
 - [ ] Study: CLAUDE.md hierarchy (global → project → local)
-- [ ] Study: Custom commands, skills, plan mode
-- [ ] Study: CI/CD and non-interactive mode
+- [ ] Study: Custom commands (`.claude/commands/`) and plan mode
+- [ ] Study: `.claude/rules/` with glob patterns — for cross-directory file-type conventions
+- [ ] Study: CI/CD with `-p` / `--print` flag — not `--no-interactive`
+- [ ] Study: Message Batches API — 50% cost saving, async only, `custom_id` correlation
 - [ ] Re-read Chapter 2 of STORY.md — the onboarding failure
-- [ ] Goal: Configure a real CLAUDE.md for a project with 3 custom commands
+- [ ] Goal: Configure a real CLAUDE.md, a rules file, and a `-p` CI script
 
 ### Week 5 — Prompt Engineering & Structured Output (Domain 3)
 - [ ] Study: `tool_use` for enforcing structured output
@@ -259,16 +261,22 @@ All courses at: https://anthropic.skilljar.com
 
 These are the "trap" wrong answers — they represent mistakes engineers actually make when they understand the concepts but haven't thought through the production implications.
 
-| Anti-Pattern | Correct Approach | Story Chapter |
+| Anti-Pattern | Correct Approach | Exam Q |
 |---|---|---|
-| Parse natural language to end loops | Check `stop_reason` programmatically | Chapter 1 |
-| Prompt-based rule enforcement | Use hooks | Chapter 1 |
-| Sentiment-based escalation | Task-complexity criteria | Chapter 1 |
-| Generic error messages from tools | Structured error objects with typed failure modes | Chapter 4 |
-| Suppress tool errors silently | Distinguish access failures from empty results | Chapter 4 |
-| Ask model to output raw JSON in text | Use `tool_use` to enforce structure | Chapter 3 |
-| Summarise all context to save tokens | Pin critical facts; preserve commitments verbatim | Chapter 5 |
-| Trust model to self-police output format | Schema validation + retry loop | Chapter 3 |
+| Parse natural language to end loops | Check `stop_reason` programmatically | — |
+| Tool ordering enforced by system prompt | Programmatic pre-call hook blocking out-of-order calls | Q1 |
+| Unclear escalation boundaries → add a hook | Unclear boundaries need explicit criteria + few-shot examples in prompt; hooks fix compliance, not clarity | Q3 |
+| Sentiment-based escalation | Complexity-based criteria (ticket type, prior contacts, account tier) | Q3 |
+| Self-reported model confidence for routing | LLM confidence is poorly calibrated — use deterministic criteria | Q3 |
+| Minimal tool descriptions | Full four-part description: what, when, response shapes, on failure | Q2 |
+| Generic error messages from tools | Structured error objects with typed failure modes | — |
+| Suppress tool errors silently | Distinguish access failures from empty results | — |
+| Ask model to output raw JSON in text | Use `tool_use` to enforce structure | — |
+| Summarise all context to save tokens | Pin critical facts; preserve commitments verbatim | — |
+| `--no-interactive` flag for CI | `-p` / `--print` flag — `--no-interactive` does not exist | Q10 |
+| Batching API for blocking workflows | Message Batches API only for async, non-blocking jobs | Q11 |
+| Directory CLAUDE.md for cross-directory rules | `.claude/rules/` with glob patterns | Q6 |
+| Larger context window fixes attention issues | Attention dilution requires focused passes, not bigger windows | Q12 |
 
 ---
 

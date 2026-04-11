@@ -98,12 +98,47 @@
 **Scenario:** Resolve's CI pipeline validates every PR by running the agent against a synthetic ticket batch and checking that output schemas are valid. No human is watching. Claude Code must complete without prompting for input, without making open-ended decisions, and without writing anything that wasn't explicitly requested.
 
 **You will:**
-1. Run Claude Code with `--no-interactive` on a task that would normally prompt for confirmation — observe what happens
-2. Create a CI script (GitHub Actions or bash) that: runs `/validate-schema` in non-interactive mode, exits with code 1 if any schema validation fails, and produces structured JSON output summarising the results
-3. Run the script against the agent code with one intentional schema violation — verify the script catches it and exits non-zero
-4. Understand the difference between non-interactive mode and headless mode — what each disables and when to use each
+1. Run Claude Code with the `-p` flag (`--print`): `claude -p "Analyse this PR for security issues"` — observe that it processes the prompt, prints to stdout, and exits without waiting for input. This is the correct way to run Claude Code in CI.
+2. Confirm that `CLAUDE_HEADLESS=true` and `--batch` are **not** valid flags — they do not exist. Any exam option referencing them is a distractor.
+3. Create a CI script (GitHub Actions or bash) that: runs `claude -p` with a structured output prompt, exits with code 1 if the output contains any `FAIL` markers, and produces JSON output for downstream parsing.
+4. Run the script against the agent code with one intentional schema violation — verify the script catches it and exits non-zero.
+5. Understand that `-p` exits after one response — it is not a session. For multi-turn CI workflows, chain multiple `claude -p` invocations, passing output between them via files or environment variables.
 
-**Key insight:** Non-interactive mode is not "Claude Code but faster." It changes which decisions Claude Code will make autonomously vs. abort on. A CI script that runs Claude Code in interactive mode will hang waiting for input that never comes.
+**Key insight:** The correct flag for non-interactive Claude Code in CI is `-p` (or `--print`). Not `--no-interactive`, not `--headless`, not `--batch`. Exam Q10 tests this exactly — the three wrong answers all reference flags that do not exist.
+
+---
+
+### Exercise 6 — `.claude/rules/` with Glob Patterns
+
+**Goal:** Use `.claude/rules/` with YAML frontmatter to apply different conventions automatically based on file paths — including files spread across the codebase that cannot be covered by a directory-level CLAUDE.md.
+
+**Scenario:** Exam Scenario 2 Q6 tests this exactly. Resolve's codebase has three convention sets: React components use functional style with hooks, API handlers use async/await with specific error handling patterns, and all test files (`.test.ts`, `.spec.ts`) follow a strict mock isolation pattern regardless of where they live in the directory tree. A test file in `components/` must follow the same test conventions as one in `api/`. A CLAUDE.md in `components/` cannot achieve this.
+
+**You will:**
+1. Create `.claude/rules/react-components.md` with YAML frontmatter `globs: ["src/components/**/*.tsx"]` — add React functional style conventions specific to that directory
+2. Create `.claude/rules/api-handlers.md` with `globs: ["src/api/**/*.ts"]` — add async/await and error handling conventions
+3. Create `.claude/rules/test-files.md` with `globs: ["**/*.test.ts", "**/*.spec.ts"]` — add mock isolation conventions that apply to test files everywhere in the codebase regardless of directory
+4. Verify that a test file in `src/components/Button.test.tsx` receives the test conventions (from the glob rule) but not the React conventions (from the directory rule) — the glob wins on the specific file type
+5. Understand why this cannot be achieved with directory-scoped CLAUDE.md files: a `CLAUDE.md` in `src/components/` would apply to all files there including non-test files, and cannot reach test files in `src/api/`
+
+**Key insight:** `.claude/rules/` with glob patterns is the only Claude Code mechanism that applies conventions based on file path patterns rather than directory location. Use it whenever the same convention must apply to files spread across multiple directories. Exam Q6's wrong answers either use CLAUDE.md (directory-bound) or skills (require manual invocation) — neither can match file paths automatically.
+
+---
+
+### Exercise 7 — Message Batches API: Blocking vs. Async Workflows
+
+**Goal:** Know when the Message Batches API is appropriate and when it is not — Exam Scenario 5 Q11 tests this with a 50% cost savings offer that is only partially correct to accept.
+
+**Scenario:** Resolve's CI pipeline has two Claude-powered workflows: (1) a pre-merge security check that developers wait for before merging, and (2) an overnight technical debt report generated at 2 AM for engineers to review the next morning. Both currently use real-time API calls. The team proposes switching both to the Message Batches API for 50% cost savings.
+
+**You will:**
+1. Understand the Message Batches API constraints: async processing, results available within 24 hours (no guaranteed latency SLA), 50% cost reduction, results correlated via `custom_id` field
+2. Implement the overnight technical debt report using the Batches API: submit a batch of file analysis requests at 2 AM, poll for completion, retrieve results by `custom_id` — verify this is correct because the 24h window fits within the overnight schedule
+3. Implement the pre-merge check using the Batches API: submit the request and poll for results — observe that "often completes in minutes" is not an acceptable SLA for a blocking developer workflow
+4. Confirm the rule: **Batches API is correct when results are not needed immediately** (overnight jobs, weekly reports, background analysis). **Real-time API is required when a human or system is waiting for the response** (pre-merge checks, interactive agents, synchronous pipelines).
+5. Use `custom_id` to correlate batch results with the files that were submitted — understand why this field exists and why "batch results can't be correlated" (exam Q11 Option C's premise) is false
+
+**Key insight:** The 50% cost saving is real but comes with no latency guarantee. The exam question tests whether you can correctly split a mixed workload — not blindly accept or reject batching for everything. Pre-merge checks require real-time. Overnight reports are ideal for batching.
 
 ---
 
@@ -114,9 +149,11 @@ Before moving to Week 5, answer these without looking:
 - [ ] List the three levels of the CLAUDE.md hierarchy in order of precedence (most specific wins)
 - [ ] Where do custom slash commands live in the project directory?
 - [ ] What does plan mode do that a direct prompt does not?
-- [ ] What happens when Claude Code encounters a decision point in non-interactive mode?
+- [ ] What is the correct CLI flag to run Claude Code non-interactively in CI? (Not `--no-interactive`)
 - [ ] Why is "be careful with database code" not a useful CLAUDE.md instruction?
-- [ ] Name two things the `/validate-schema` command should do that a human code reviewer might miss
+- [ ] What is `.claude/rules/` and when is it required instead of a subdirectory CLAUDE.md?
+- [ ] Name two workflows where the Message Batches API is appropriate and two where it is not
+- [ ] What field in the Batches API response lets you correlate results with submitted requests?
 
 ---
 
@@ -128,7 +165,9 @@ Before moving to Week 5, answer these without looking:
 | 2 | D2 | Effective constraint instructions vs. descriptive prose |
 | 3 | D2 | Custom commands; discoverability; replacing tribal knowledge |
 | 4 | D2 | Plan mode for multi-file changes; explicit change enumeration |
-| 5 | D2 | Non-interactive mode; CI/CD integration; exit codes |
+| 5 | D2 | `-p` flag for CI; exit codes; non-existent flags as distractors |
+| 6 | D2 | `.claude/rules/` with glob patterns; file-path-conditional conventions |
+| 7 | D2, D3 | Message Batches API; blocking vs. async; `custom_id` correlation |
 
 ---
 
