@@ -6,6 +6,54 @@
 
 A minimal but complete foundation: raw API calls, tool definitions, `stop_reason` handling, and the critical difference between *asking* a model for structured output and *requiring* it. By the end of this lab, you will have written and broken every pattern that appears in Domain 1 and Domain 3.
 
+---
+
+## How It All Fits Together
+
+This is the mental model you are building across all six exercises. Every pattern traces back to this loop:
+
+```mermaid
+flowchart TD
+    A([User / Application]) -->|messages array| B[Claude API]
+    B -->|response object| C{stop_reason?}
+
+    C -->|end_turn| D[✓ Model finished\nRead response.content]
+    C -->|tool_use| E[Execute tool\nAppend tool_result]
+    C -->|max_tokens| F[✗ Output truncated\nEscalate or retry]
+    C -->|stop_sequence| G[Custom stop hit\nHandle as designed]
+
+    E -->|Append assistant + user\ntool_result messages| B
+
+    D --> H([Return answer to user])
+    F --> I([Escalate to human])
+```
+
+**Core idea:** The API is stateless. You maintain the conversation by building up the `messages` array yourself. Each round-trip is one inference call. `stop_reason` — not model language — is your control signal.
+
+---
+
+## Exercise Progression
+
+```mermaid
+flowchart LR
+    E1[Ex 1\nResponse object\nstructure] --> E2[Ex 2\nstop_reason\nvalues]
+    E2 --> E3[Ex 3\nFull tool\ncycle loop]
+    E3 --> E4[Ex 4\nTool return\nshapes]
+    E4 --> E5[Ex 5\nStructured output\nask vs require]
+    E5 --> E6[Ex 6\nValidation-retry\nloop]
+
+    style E1 fill:#dbeafe
+    style E2 fill:#dbeafe
+    style E3 fill:#dcfce7
+    style E4 fill:#fef9c3
+    style E5 fill:#fce7f3
+    style E6 fill:#fce7f3
+```
+
+Exercises 1–2 build your mental model of the response object. Exercise 3 builds the agentic loop. Exercises 4–6 harden it.
+
+---
+
 ## Prerequisites
 
 ```bash
@@ -25,6 +73,27 @@ All exercises use `claude-sonnet-4-6`. Run each exercise file independently.
 ## Exercise 1 — Your First API Call
 
 **What it teaches:** The structure of a Claude response. Everything downstream depends on understanding this object.
+
+```mermaid
+flowchart LR
+    subgraph Request ["client.messages.create()"]
+        R1["model: 'claude-sonnet-4-6'"]
+        R2["max_tokens: 256"]
+        R3["messages: [{role, content}]"]
+    end
+
+    subgraph Response ["response object"]
+        P1[".id"]
+        P2[".model"]
+        P3[".stop_reason"]
+        P4[".usage.input_tokens\n.usage.output_tokens"]
+        P5[".content[ ]\n  .type  ('text' | 'tool_use')\n  .text"]
+    end
+
+    Request -->|"HTTP POST"| Response
+```
+
+The `response.content` is a **list** — it can hold text blocks, tool-use blocks, or both. Always iterate over it; never assume `content[0]` is text.
 
 Create `exercise_1_basic_call.py`:
 
@@ -72,6 +141,30 @@ Run it and study the output carefully.
 ## Exercise 2 — Understanding `stop_reason`
 
 **What it teaches:** The exact values `stop_reason` can take and what each means for loop control. Domain 1 has multiple questions testing whether you check `stop_reason` or parse language.
+
+```mermaid
+flowchart TD
+    SR{response.stop_reason} --> ET[end_turn]
+    SR --> MT[max_tokens]
+    SR --> TU[tool_use]
+    SR --> SS[stop_sequence]
+
+    ET --> ET2["Model chose to stop\n✓ Output is complete\nSafe to present to user"]
+    MT --> MT2["Budget exhausted\n✗ Output is truncated\nDo NOT treat as success"]
+    TU --> TU2["Model wants to call a tool\nMust handle before continuing\nLoop continues"]
+    SS --> SS2["Hit a custom stop string\nYou defined this behaviour\nHandle as designed"]
+
+    style ET fill:#dcfce7
+    style ET2 fill:#dcfce7
+    style MT fill:#fee2e2
+    style MT2 fill:#fee2e2
+    style TU fill:#fef9c3
+    style TU2 fill:#fef9c3
+    style SS fill:#dbeafe
+    style SS2 fill:#dbeafe
+```
+
+**Why this matters for loops:** A loop that exits on `end_turn` **and** `max_tokens` will silently return a truncated, incomplete answer. They are not the same signal.
 
 Create `exercise_2_stop_reason.py`:
 
@@ -148,6 +241,27 @@ if r.stop_reason == "tool_use":
 ## Exercise 3 — Tool Use: The Full Cycle
 
 **What it teaches:** How a complete tool call cycle works — request, tool_use response, tool result, final answer. This is the foundation of every agentic loop.
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant Claude
+    participant Tool as get_account_status()
+
+    App->>Claude: messages=[{role:user, content:"Check invoice..."}]<br/>tools=[get_account_status]
+
+    Claude-->>App: stop_reason="tool_use"<br/>content=[{type:"tool_use", id:"tu_x", name:..., input:{customer_id:...}}]
+
+    App->>Tool: get_account_status("cust_9182")
+    Tool-->>App: {name:"Acme", open_invoices:2, ...}
+
+    Note over App: Append BOTH to messages:<br/>1. assistant message (with tool_use blocks)<br/>2. user message (with tool_result blocks)
+
+    App->>Claude: messages=[..., assistant(tool_use), user(tool_result)]
+    Claude-->>App: stop_reason="end_turn"<br/>content=[{type:"text", text:"You have 2 open invoices..."}]
+```
+
+**Message history rule:** After a tool call you must append **two** messages — the assistant's `tool_use` turn, then the user's `tool_result` turn. Skipping the assistant message causes an API validation error.
 
 Create `exercise_3_tool_cycle.py`:
 
@@ -282,6 +396,32 @@ run_agent("cust_0001", "What plan am I currently on?")
 
 **What it teaches:** Why `{}` is the most dangerous return value a tool can produce. This is the root cause of Resolve's Chapter 4 incident — and a common wrong answer on the exam.
 
+```mermaid
+flowchart TD
+    CRM{CRM request}
+
+    CRM -->|Data found| S["{status: 'success'\nplan: 'enterprise'\nopen_invoices: 2}"]
+    CRM -->|Customer not found| E["{status: 'empty'\nmessage: 'No account found'}"]
+    CRM -->|CRM unavailable| F["{status: 'access_failure'\ncode: 'CRM_TIMEOUT'\nmessage: 'Do not proceed'}"]
+    CRM -->|BAD pattern| X["{}"]
+
+    S --> SA["Model: 'You have 2 open invoices'\n✓ Correct"]
+    E --> EA["Model: 'No account found — verify ID'\n✓ Correct"]
+    F --> FA["Model: 'I cannot access billing — escalating'\n✓ Correct"]
+    X --> XA["Model: 'I don't see any invoices'\n✗ Wrong — CRM was down, not empty"]
+
+    style X fill:#fee2e2
+    style XA fill:#fee2e2
+    style S fill:#dcfce7
+    style SA fill:#dcfce7
+    style E fill:#fef9c3
+    style EA fill:#fef9c3
+    style F fill:#dbeafe
+    style FA fill:#dbeafe
+```
+
+**Design rule:** Every tool must return a discriminated response with a `status` field. The model cannot distinguish "no data" from "call failed" unless you tell it.
+
 Create `exercise_4_empty_vs_failure.py`:
 
 ```python
@@ -401,6 +541,32 @@ run_with_tool_version("GOOD — typed failure response", get_account_status_good
 ## Exercise 5 — Structured Output: Asked vs. Required
 
 **What it teaches:** The central lesson of Chapter 3 — the difference between *asking* a model for structured output and *requiring* it via `tool_use`. This is one of the most common wrong answers on the exam.
+
+```mermaid
+flowchart LR
+    subgraph A ["Approach A — Ask for JSON in prompt"]
+        direction TB
+        A1["system: 'Always respond\nwith a JSON object'"] --> A2[Claude]
+        A2 --> A3{"What did\nClaude return?"}
+        A3 -->|"Sometimes"| A4["Raw JSON\n✓ Parses OK"]
+        A3 -->|"Sometimes"| A5["```json\n{...}\n```\n✗ json.loads fails"]
+        A3 -->|"Sometimes"| A6["'Sure! Here is the JSON:'\n{...}\n✗ json.loads fails"]
+    end
+
+    subgraph B ["Approach B — Require via tool_use"]
+        direction TB
+        B1["tool_choice:\n{type:'tool', name:'classify_ticket'}"] --> B2[Claude]
+        B2 --> B3["stop_reason = 'tool_use'\nblock.input = validated dict"]
+        B3 --> B4["json schema enforced\nby API\n✓ Always parseable"]
+    end
+
+    style A4 fill:#dcfce7
+    style A5 fill:#fee2e2
+    style A6 fill:#fee2e2
+    style B4 fill:#dcfce7
+```
+
+**Key difference:** `tool_choice: {"type": "tool", "name": "..."}` is a **guarantee** enforced by the API. A system prompt instruction is a **request** — the model may or may not follow it, and variance increases under load.
 
 Create `exercise_5_structured_output.py`:
 
@@ -528,6 +694,34 @@ approach_b_require_via_tool()
 ## Exercise 6 — Building a Validation-Retry Loop
 
 **What it teaches:** What to do when structured output validation fails despite your best efforts — and how to build a retry loop that doesn't mask failures.
+
+```mermaid
+flowchart TD
+    Start([Ticket arrives]) --> Call[Call Claude\ntool_choice=classify_ticket]
+    Call --> Check{tool_use\nblock present?}
+
+    Check -->|No| AppendCorrection["Append correction message:\n'You must call classify_ticket'"]
+    AppendCorrection --> Retry{Attempts\nleft?}
+
+    Check -->|Yes| Validate{Business logic\nvalidation passes?}
+    Validate -->|"confidence not in 0–1\nor other rule fails"| AppendError["Append tool_result\nwith is_error=True\n+ error details"]
+    AppendError --> Retry
+
+    Validate -->|Pass| Return([Return result ✓])
+
+    Retry -->|Yes| Call
+    Retry -->|No| Escalate([Escalate to human\nreview queue ✗])
+
+    style Return fill:#dcfce7
+    style Escalate fill:#fef9c3
+    style AppendError fill:#fee2e2
+    style AppendCorrection fill:#fee2e2
+```
+
+**Three-layer safety:**
+1. **API schema** — enforces field types and required fields (handled by the API)
+2. **Business rules** — range checks, cross-field logic (handled in your code)
+3. **Retry budget** — exhausted retries go to humans, never silently succeed
 
 Create `exercise_6_retry_loop.py`:
 
