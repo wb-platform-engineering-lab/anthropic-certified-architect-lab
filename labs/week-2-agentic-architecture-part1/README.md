@@ -2,6 +2,69 @@
 
 > **Resolve context:** This is the week that explains the $11,400 incident. The agent that ran 14,000 tool calls on a single ticket was not broken — it was doing exactly what it was designed to do. The design was the problem. These exercises rebuild that agent from first principles, replacing every fragile assumption with a deterministic guarantee.
 
+---
+
+## How It All Fits Together
+
+The complete architecture you build across these six exercises:
+
+```mermaid
+flowchart TD
+    Ticket([Ticket arrives]) --> SD[Decompose into\nbounded sub-tasks]
+    SD --> Loop
+
+    subgraph Loop ["Agentic Loop (Ex 1–3)"]
+        direction TB
+        L1[Call Claude API] --> L2{stop_reason?}
+        L2 -->|tool_use| L3[Execute tool\nUpdate SessionState\nCheck pre-call hook]
+        L3 --> L4{Budget\nexhausted?}
+        L4 -->|No| L1
+        L4 -->|Yes| LE[Exit: budget_exhausted]
+        L2 -->|end_turn| LS[Exit: success]
+        L2 -->|max_tokens| LF[Exit: truncated]
+        L2 -->|unexpected| LF2[Exit: error]
+    end
+
+    LS --> Next{Next\nsub-task?}
+    Next -->|Yes| Loop
+    Next -->|No| Done([Return resolution])
+
+    LE --> Escalate([Escalate to human])
+    LF --> Escalate
+    LF2 --> Escalate
+
+    style LS fill:#dcfce7
+    style Done fill:#dcfce7
+    style Escalate fill:#fef9c3
+    style LE fill:#fee2e2
+    style LF fill:#fee2e2
+    style LF2 fill:#fee2e2
+```
+
+**Core idea:** Every exit from the loop is typed. The calling code acts on the exit reason — it never assumes success.
+
+---
+
+## Exercise Progression
+
+```mermaid
+flowchart LR
+    E1[Ex 1\nLoop termination\nstop_reason driven] --> E2[Ex 2\nIteration\nbudget]
+    E2 --> E3[Ex 3\nSession\nstate]
+    E3 --> E4[Ex 4\nTask\ndecomposition]
+    E4 --> E5[Ex 5\nEscalation\ntypes]
+    E5 --> E6[Ex 6\nAgent SDK\nvs raw API]
+
+    style E1 fill:#dbeafe
+    style E2 fill:#dbeafe
+    style E3 fill:#dcfce7
+    style E4 fill:#dcfce7
+    style E5 fill:#fef9c3
+    style E6 fill:#fce7f3
+```
+
+---
+
 ## Learning Objectives
 
 - Control agentic loop termination exclusively through `stop_reason` — never through model language
@@ -29,6 +92,25 @@
 
 **Goal:** Build an agentic loop that handles all four `stop_reason` values explicitly and never exits on an unrecognised state.
 
+```mermaid
+flowchart TD
+    Start([Call Claude]) --> SR{stop_reason}
+
+    SR -->|end_turn| A["✓ SUCCESS\nReturn response content"]
+    SR -->|tool_use| B["Execute tool\nAppend messages\nLoop again"]
+    SR -->|max_tokens| C["✗ TRUNCATED\nOutput is incomplete\nEscalate"]
+    SR -->|anything else| D["✗ UNKNOWN\nFail safe\nEscalate"]
+
+    B --> Start
+
+    style A fill:#dcfce7
+    style B fill:#fef9c3
+    style C fill:#fee2e2
+    style D fill:#fee2e2
+```
+
+**The bug the broken version has:** An `else` or natural-language check that treats unknown/truncated responses as success.
+
 **Scenario:** Reproduce a simplified version of the loop that caused the Chapter 1 incident. First build the broken version that exits on natural language detection. Then replace it with `stop_reason`-driven termination.
 
 **You will:**
@@ -44,6 +126,28 @@
 ### Exercise 2 — The Iteration Budget
 
 **Goal:** Implement a principled iteration budget that distinguishes between "the task is done," "the task hit its limit," and "the task failed."
+
+```mermaid
+flowchart TD
+    Init["iteration = 0\nmax_iterations = N"] --> Loop
+
+    Loop["Call Claude\niteration += 1"] --> SR{stop_reason}
+
+    SR -->|end_turn| OK["Return\n{status: 'success', result: ...}"]
+    SR -->|tool_use| BudgetCheck{iteration >=\nmax_iterations?}
+    SR -->|max_tokens| Trunc["Return\n{status: 'truncated'}"]
+    SR -->|other| Err["Return\n{status: 'error'}"]
+
+    BudgetCheck -->|No| ExecTool["Execute tool\nAppend messages"] --> Loop
+    BudgetCheck -->|Yes| Budget["Return\n{status: 'budget_exhausted'\niteration_count: N}"]
+
+    style OK fill:#dcfce7
+    style Budget fill:#fef9c3
+    style Trunc fill:#fee2e2
+    style Err fill:#fee2e2
+```
+
+**Return typed results, not strings.** The caller must be able to branch on `status` — not parse a message.
 
 **Scenario:** The Chapter 1 agent had no iteration budget. The rate limiter was the only thing that stopped it — after 14,000 calls. This exercise makes the budget explicit and shows what happens at each boundary.
 
@@ -62,6 +166,31 @@
 
 **Goal:** Represent the agent's working state as an explicit data structure rather than relying on conversation history alone.
 
+```mermaid
+flowchart LR
+    subgraph State ["SessionState (maintained in code)"]
+        S1["ticket_id"]
+        S2["tools_called: set"]
+        S3["confirmed_facts: dict"]
+        S4["current_decision: str | None"]
+        S5["iteration_count: int"]
+    end
+
+    subgraph History ["messages[] (what Claude sees)"]
+        H1["user turn"]
+        H2["assistant + tool_use"]
+        H3["user + tool_result"]
+        H4["..."]
+    end
+
+    ToolCall["Tool executes"] -->|"state.tools_called.add(name)\nstate.confirmed_facts.update(...)"| State
+    ToolCall -->|"append assistant + tool_result"| History
+
+    State -->|"if name in state.tools_called:\n  skip redundant call"| Guard["Redundancy guard"]
+```
+
+**Key distinction:** History tells you *what was said*. State tells you *what was established*. Use state for decisions, history for context.
+
 **Scenario:** Resolve's agents handle tickets that span multiple API calls. Between calls, the agent must track which tools it has already called, what it has already confirmed, and what decisions it has already made. Losing this state causes the contradictions described in Chapter 5.
 
 **You will:**
@@ -78,6 +207,28 @@
 
 **Goal:** Break a multi-step ticket resolution into a sequence of bounded sub-tasks, each with a defined completion criterion.
 
+```mermaid
+flowchart LR
+    T([Ticket]) --> ST1
+
+    ST1["Sub-task 1\nVerify account\nDone when: account_id confirmed"] -->|success| ST2
+    ST1 -->|fail| ESC([Escalate])
+
+    ST2["Sub-task 2\nCheck incidents\nDone when: incident list returned"] -->|success| ST3
+    ST2 -->|fail| ESC
+
+    ST3["Sub-task 3\nLookup billing\nDone when: invoice history returned"] -->|success| ST4
+    ST3 -->|fail| ESC
+
+    ST4["Sub-task 4\nDraft resolution\nDone when: reply text generated"] -->|success| Done([Return resolution])
+    ST4 -->|fail| ESC
+
+    style Done fill:#dcfce7
+    style ESC fill:#fef9c3
+```
+
+**Completion criteria live in code — not in the model.** The model produces output; your code decides if the sub-task is done.
+
 **Scenario:** A Resolve enterprise ticket requires: (1) verifying account status, (2) checking for known incidents, (3) looking up billing history, and (4) drafting a resolution. Treating this as one open-ended task is what caused the Chapter 1 loop — the model kept deciding it needed "more context."
 
 **You will:**
@@ -91,6 +242,30 @@
 ---
 
 ### Exercise 5 — Escalation: Boundary Clarity vs. Structural Enforcement
+
+```mermaid
+flowchart TD
+    Problem{What kind of\nescalation problem?}
+
+    Problem -->|"Agent escalates wrong cases\n(doesn't know the threshold)"| BC["Boundary Clarity problem"]
+    Problem -->|"Agent knows the rule\nbut skips it"| SE["Structural Enforcement problem"]
+
+    BC --> BCFix["Fix: Explicit criteria +\nfew-shot examples in system prompt\n(one clear escalate, one clear resolve,\none genuine boundary case)"]
+    SE --> SEFix["Fix: Pre-call hook in code\nthat raises ToolOrderViolation\nbefore the bad call reaches the model"]
+
+    BCWrong["Wrong fix: programmatic\ncomplexity score threshold\n(enforces the wrong boundary)"]
+    SEWrong["Wrong fix: more explicit\nprompt instructions\n(still probabilistic compliance)"]
+
+    BC -.->|"common mistake"| BCWrong
+    SE -.->|"common mistake"| SEWrong
+
+    style BCFix fill:#dcfce7
+    style SEFix fill:#dcfce7
+    style BCWrong fill:#fee2e2
+    style SEWrong fill:#fee2e2
+```
+
+**Exam rule:** Sentiment analysis, confidence scores, and separate classifiers are all wrong answers. If the boundary is unclear → fix the prompt with examples. If the rule is known but skipped → enforce it in code.
 
 **Goal:** Understand the two distinct escalation problems the exam tests — and apply the correct fix to each. Conflating them is one of the most common ways to lose marks on Scenario 1 questions.
 
@@ -117,6 +292,33 @@
 ---
 
 ### Exercise 6 — The Claude Agent SDK
+
+```mermaid
+flowchart LR
+    subgraph Raw ["Raw API (Exercises 1–5)"]
+        R1["Hand-rolled while loop"]
+        R2["Manual messages[] append"]
+        R3["Manual tool dispatch"]
+        R4["Manual SessionState class"]
+        R5["Manual stop_reason routing"]
+    end
+
+    subgraph SDK ["Claude Agent SDK (Exercise 6)"]
+        S1["Agent class / run()"]
+        S2["Built-in message history"]
+        S3["Tool registration decorator"]
+        S4["Built-in session management"]
+        S5["Built-in stop_reason routing"]
+    end
+
+    R1 -.->|replaced by| S1
+    R2 -.->|replaced by| S2
+    R3 -.->|replaced by| S3
+    R4 -.->|replaced by| S4
+    R5 -.->|replaced by| S5
+```
+
+**What the SDK does NOT change:** The underlying termination contract (`stop_reason`), the tool call message cycle, and escalation logic. The exam tests these invariants — the SDK is just how you express them.
 
 **Goal:** Understand what the Agent SDK provides on top of the raw API and rebuild the Resolve loop using it — this is the layer the exam's Scenario 1, 3, and 4 questions assume you know.
 
@@ -165,3 +367,18 @@ Before moving to Week 3, answer these without looking:
 Week 3 covers the second half of Domain 1: multi-agent orchestration, the coordinator/subagent pattern, hub-and-spoke architecture, and hooks as programmatic guardrails.
 
 → **[Week 3 Lab — Agentic Architecture Part 2](../week-3-agentic-architecture-part2/README.md)**
+
+---
+
+## Running the Exercises
+
+```bash
+cd labs/week-2-agentic-architecture-part1
+pip install anthropic python-dotenv
+python exercise_1_loop_termination.py
+python exercise_2_iteration_budget.py
+python exercise_3_session_state.py
+python exercise_4_task_decomposition.py
+python exercise_5_escalation.py
+python exercise_6_agent_sdk.py
+```
