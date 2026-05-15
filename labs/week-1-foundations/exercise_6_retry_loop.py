@@ -1,11 +1,12 @@
 import anthropic
 import json
+from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
 client = anthropic.Anthropic()
 
-def classify_ticket_with_retry(ticket: str, max_retries: int = 3) -> dict | None:
+def classify_ticket_with_retry(ticket: str, max_retries: int = 3) -> Optional[dict]:
     """
     Classify a ticket using tool_use with a validation-retry loop.
 
