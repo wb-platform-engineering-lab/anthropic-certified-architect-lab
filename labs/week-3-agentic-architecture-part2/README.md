@@ -10,24 +10,24 @@ The complete multi-agent architecture you build across these five exercises:
 
 ```mermaid
 flowchart TD
-    Ticket([Ticket arrives]) --> Coord[CoordinatorAgent\ndecomposes + dispatches]
+    Ticket([Ticket arrives]) --> Coord[CoordinatorAgent\ndecomposes and dispatches]
 
-    subgraph Parallel ["Parallel Subagents (Ex 1–2)"]
+    subgraph Parallel ["Parallel Subagents"]
         direction LR
         SA1[AccountAgent\nCRM tools]
         SA2[BillingAgent\nInvoice tools]
         SA3[IncidentAgent\nStatus page tools]
     end
 
-    Coord -->|"task_def + tool_set\n(no coordinator history)"| SA1
-    Coord -->|"task_def + tool_set"| SA2
-    Coord -->|"task_def + tool_set"| SA3
+    Coord -->|task and tool_set only| SA1
+    Coord -->|task and tool_set only| SA2
+    Coord -->|task and tool_set only| SA3
 
     SA1 -->|typed result| Merge[Coordinator assembles\npartial results]
     SA2 -->|typed result| Merge
     SA3 -->|typed result or failure| Merge
 
-    Merge --> Threshold{Successes >=\nmin threshold?}
+    Merge --> Threshold{Successes >= min threshold?}
     Threshold -->|Yes| Draft[DraftResolutionAgent\nsequential dependency]
     Threshold -->|No| Escalate([Escalate to human])
 
@@ -76,15 +76,15 @@ Exercises 1–2 build the multi-agent architecture. Exercise 3 hardens it with h
 
 ```mermaid
 flowchart TD
-    Ticket([Ticket]) --> Coord[CoordinatorAgent\ndecomposes + dispatches]
+    Ticket([Ticket]) --> Coord[CoordinatorAgent\ndecomposes and dispatches]
 
-    Coord -->|"task_def + tool_set\n(no coordinator history)"| A[AccountAgent\nget_account_status]
-    Coord -->|"task_def + tool_set"| B[BillingAgent\nlist_invoices + get_invoice_detail]
-    Coord -->|"task_def + tool_set"| C[IncidentAgent\ncheck_status_page]
+    Coord -->|task string and tool_set only| A[AccountAgent\nget_account_status]
+    Coord -->|task string and tool_set only| B[BillingAgent\nlist_invoices + get_invoice_detail]
+    Coord -->|task string and tool_set only| C[IncidentAgent\ncheck_status_page]
 
-    A -->|"typed SubAgentResult"| Coord
-    B -->|"typed SubAgentResult"| Coord
-    C -->|"typed SubAgentResult"| Coord
+    A -->|typed SubAgentResult| Coord
+    B -->|typed SubAgentResult| Coord
+    C -->|typed SubAgentResult| Coord
 
     Coord --> Res([Assembled resolution])
 
@@ -403,7 +403,7 @@ print("  SubAgentResult is a typed dataclass — never a plain string.")
 flowchart TD
     Start([Ticket]) --> P
 
-    subgraph P ["Parallel — ThreadPoolExecutor"]
+    subgraph P ["Parallel via ThreadPoolExecutor"]
         direction LR
         PA[AccountAgent]
         PB[BillingAgent]
@@ -414,7 +414,7 @@ flowchart TD
     PB -->|result| Wait
     PC -->|result or failure| Wait
 
-    Wait --> Decision{successes >= MIN_SUCCESSES?}
+    Wait --> Decision{"successes >= MIN_SUCCESSES?"}
     Decision -->|Yes| Draft[DraftAgent\nsequential dependency]
     Decision -->|No| Escalate([Escalate])
 
@@ -1050,7 +1050,7 @@ flowchart LR
 
     subgraph PL ["Pipeline"]
         direction LR
-        P1[EnrichmentAgent\nadds account + incidents] -->|growing context| P2[ClassificationAgent\nadds decision + confidence]
+        P1[EnrichmentAgent\nadds account and incidents] -->|growing context| P2[ClassificationAgent\nadds decision and confidence]
         P2 -->|growing context| P3[ResponseAgent\nwrites reply]
     end
 ```
@@ -1111,14 +1111,14 @@ for stage in [EnrichmentAgent, ClassificationAgent, ResponseAgent]:
 ```mermaid
 flowchart TD
     Coord[Coordinator] --> SA1[AccountAgent\nalways reliable]
-    Coord --> SA2[BillingAgent\n30% failure rate]
-    Coord --> SA3[IncidentAgent\n60% failure rate]
+    Coord --> SA2[BillingAgent\n30 pct failure rate]
+    Coord --> SA3[IncidentAgent\n60 pct failure rate]
 
     SA1 -->|success| Results[Typed results collected]
     SA2 -->|success or access_failure| Results
     SA3 -->|success or access_failure| Results
 
-    Results --> Threshold{"successes >=\nmin_successes\n(2 of 3)?"}
+    Results --> Threshold{"successes >= min_successes?"}
     Threshold -->|All 3 succeeded| Full([full_resolution])
     Threshold -->|2 of 3 succeeded| Degrade([degraded\nflagged for review])
     Threshold -->|Less than 2| Escalate([insufficient_data\nescalate to human])
