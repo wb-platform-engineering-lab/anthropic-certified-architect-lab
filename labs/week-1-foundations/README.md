@@ -546,18 +546,18 @@ run_with_tool_version("GOOD — typed failure response", get_account_status_good
 flowchart LR
     subgraph A ["Approach A — Ask for JSON in prompt"]
         direction TB
-        A1["system: 'Always respond\nwith a JSON object'"] --> A2[Claude]
-        A2 --> A3{"What did\nClaude return?"}
+        A1["system: Always respond with a JSON object"] --> A2[Claude]
+        A2 --> A3{"What did Claude return?"}
         A3 -->|"Sometimes"| A4["Raw JSON\n✓ Parses OK"]
-        A3 -->|"Sometimes"| A5["```json\n{...}\n```\n✗ json.loads fails"]
-        A3 -->|"Sometimes"| A6["'Sure! Here is the JSON:'\n{...}\n✗ json.loads fails"]
+        A3 -->|"Sometimes"| A5["Markdown code block wrapping JSON\n✗ json.loads fails"]
+        A3 -->|"Sometimes"| A6["Preamble sentence before JSON\n✗ json.loads fails"]
     end
 
     subgraph B ["Approach B — Require via tool_use"]
         direction TB
-        B1["tool_choice:\n{type:'tool', name:'classify_ticket'}"] --> B2[Claude]
-        B2 --> B3["stop_reason = 'tool_use'\nblock.input = validated dict"]
-        B3 --> B4["json schema enforced\nby API\n✓ Always parseable"]
+        B1["tool_choice: force classify_ticket"] --> B2[Claude]
+        B2 --> B3["stop_reason = tool_use\nblock.input = validated dict"]
+        B3 --> B4["JSON schema enforced by API\n✓ Always parseable"]
     end
 
     style A4 fill:#dcfce7
