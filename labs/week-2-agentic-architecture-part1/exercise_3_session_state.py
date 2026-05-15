@@ -11,7 +11,7 @@ Key behaviours demonstrated:
 """
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 import anthropic
 from dotenv import load_dotenv
@@ -25,7 +25,7 @@ class SessionState:
     ticket_id: str
     tools_called: set = field(default_factory=set)        # names of tools already executed
     confirmed_facts: dict = field(default_factory=dict)   # key facts extracted from tool results
-    current_decision: str | None = None                   # latest routing decision
+    current_decision: Optional[str] = None                 # latest routing decision
     iteration_count: int = 0
 
     def record_tool(self, name: str, result: dict):
