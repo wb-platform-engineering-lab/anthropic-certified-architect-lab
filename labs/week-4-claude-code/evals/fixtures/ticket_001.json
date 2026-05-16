@@ -1,0 +1,9 @@
+{
+  "ticket_id": "ticket_001",
+  "customer_id": "cust_4471",
+  "ticket_text": "I was charged twice for my Pro plan in May. I see two identical charges of $49 on my statement from May 1st. Please issue a refund for the duplicate charge.",
+  "expected_classification": "billing",
+  "expected_exit_reason": "success",
+  "expected_agents": ["BillingAgent"],
+  "notes": "Standard duplicate charge complaint. BillingAgent should find the duplicate and issue a refund."
+}

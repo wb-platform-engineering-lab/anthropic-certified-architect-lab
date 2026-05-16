@@ -1,0 +1,95 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Resolve Agent Output Schema",
+  "description": "Defines the expected shape of every coordinator result. The eval harness validates all 50 synthetic ticket outputs against this schema.",
+  "type": "object",
+  "required": [
+    "ticket_id",
+    "customer_id",
+    "raw_ticket",
+    "classification",
+    "dispatched_agents",
+    "violations",
+    "iteration_counts",
+    "exit_reason",
+    "final_reply"
+  ],
+  "properties": {
+    "ticket_id": {
+      "type": "string",
+      "description": "Unique identifier for the ticket"
+    },
+    "customer_id": {
+      "type": "string",
+      "description": "Customer account identifier"
+    },
+    "raw_ticket": {
+      "type": "string",
+      "description": "Original ticket text, unmodified"
+    },
+    "classification": {
+      "type": "string",
+      "enum": ["billing", "account", "incident", "mixed", "unknown"],
+      "description": "Ticket classification produced by the coordinator"
+    },
+    "dispatched_agents": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Names of subagents dispatched for this ticket"
+    },
+    "account_facts": {
+      "type": "object",
+      "description": "Facts gathered by AccountAgent. Empty if AccountAgent was not dispatched."
+    },
+    "billing_facts": {
+      "type": "object",
+      "description": "Facts gathered by BillingAgent. Empty if BillingAgent was not dispatched."
+    },
+    "incident_facts": {
+      "type": "object",
+      "description": "Facts gathered by IncidentAgent. Empty if IncidentAgent was not dispatched."
+    },
+    "violations": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "HookViolation messages. Empty array if no violations occurred."
+    },
+    "iteration_counts": {
+      "type": "object",
+      "additionalProperties": {"type": "integer"},
+      "description": "Map of agent_name -> iterations used. E.g. {\"BillingAgent\": 3}"
+    },
+    "exit_reason": {
+      "type": "string",
+      "enum": ["success", "budget_exhausted", "truncated", "error"],
+      "description": "Final exit reason for the coordinator run"
+    },
+    "final_reply": {
+      "type": "string",
+      "description": "The customer-facing reply text assembled by the coordinator"
+    }
+  },
+  "tool_return_shapes": {
+    "description": "Every tool must return a dict conforming to one of these shapes.",
+    "get_account_details": {
+      "success": {"status": "success", "plan": "string", "active": "boolean", "auth_state": "string"},
+      "access_failure": {"status": "access_failure", "code": "string", "message": "string"}
+    },
+    "get_billing_summary": {
+      "success": {"status": "success", "last_invoice": "object", "duplicate_charge": "object|null", "open_refund_eligible": "boolean"},
+      "empty": {"status": "empty", "message": "string"}
+    },
+    "issue_refund": {
+      "success": {"status": "success", "refund_id": "string", "amount": "number", "eta_days": "string", "message": "string"},
+      "access_failure": {"status": "access_failure", "code": "string", "message": "string"}
+    },
+    "get_incident_status": {
+      "success": {"status": "success", "active_incidents": "array", "region": "string", "service_health": "string"},
+      "empty": {"status": "empty", "active_incidents": [], "region": "string", "service_health": "string"}
+    },
+    "escalate_incident": {
+      "success": {"status": "success", "escalation_id": "string", "priority": "string", "message": "string"},
+      "access_failure": {"status": "access_failure", "code": "string", "message": "string"}
+    }
+  }
+}
