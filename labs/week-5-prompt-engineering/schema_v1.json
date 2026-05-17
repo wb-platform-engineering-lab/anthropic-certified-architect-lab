@@ -1,0 +1,29 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TicketClassification v1 (broken)",
+  "description": "Original schema. Three known problems: decision is free-text, confidence has no range constraint, escalation_team is optional but downstream assumes it is always present on escalations.",
+  "type": "object",
+  "required": ["decision", "confidence", "reason"],
+  "properties": {
+    "decision": {
+      "type": "string",
+      "description": "What to do with this ticket"
+    },
+    "confidence": {
+      "type": "number",
+      "description": "How confident are you"
+    },
+    "reason": {
+      "type": "string",
+      "description": "Why did you make this decision"
+    },
+    "escalation_team": {
+      "type": "string",
+      "description": "Which team to escalate to"
+    },
+    "resolution": {
+      "type": "string",
+      "description": "The resolution text if auto-resolving"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TicketClassification v2 (fixed)",
+  "description": "Fixed schema: decision is an enum, confidence has range description, escalation_team and resolution are conditionally required and explicitly nullable.",
+  "type": "object",
+  "required": ["decision", "confidence", "reason", "escalation_team", "resolution"],
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": ["auto_resolve", "escalate", "needs_info"],
+      "description": "Exactly one of three values. auto_resolve: ticket can be resolved without human. escalate: requires human review. needs_info: cannot classify without more information from the customer."
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Confidence in the decision. Range 0.0 to 1.0. Values below 0.6 should not be used for auto_resolve decisions."
+    },
+    "reason": {
+      "type": "string",
+      "description": "One or two sentences explaining the decision. Must reference specific facts from the ticket."
+    },
+    "escalation_team": {
+      "type": ["string", "null"],
+      "enum": ["billing", "technical", "enterprise", "legal", null],
+      "description": "Required and non-null when decision is escalate. Explicitly null when decision is auto_resolve or needs_info."
+    },
+    "resolution": {
+      "type": ["string", "null"],
+      "description": "The customer-facing resolution text. Required and non-null when decision is auto_resolve. Explicitly null when decision is escalate or needs_info."
+    }
+  }
+}
