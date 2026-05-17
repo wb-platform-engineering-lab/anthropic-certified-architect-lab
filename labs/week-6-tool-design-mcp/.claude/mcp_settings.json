@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "resolve-crm": {
+      "command": "python",
+      "args": ["exercise_3_crm_server.py"],
+      "env": {
+        "CRM_READ_ONLY": "false"
+      },
+      "description": "Resolve CRM server (stdio). Provides get_account_status, update_contact_notes, list_open_tickets."
+    },
+    "resolve-crm-readonly": {
+      "command": "python",
+      "args": ["exercise_3_crm_server.py"],
+      "env": {
+        "CRM_READ_ONLY": "true"
+      },
+      "description": "Resolve CRM server in read-only mode. update_contact_notes returns access_failure."
+    },
+    "resolve-billing": {
+      "type": "sse",
+      "url": "http://127.0.0.1:8001/sse",
+      "description": "Resolve Billing server (SSE). Start with: python exercise_4_billing_server.py. Provides billing_read.* and billing_write.* tools."
+    }
+  }
+}
