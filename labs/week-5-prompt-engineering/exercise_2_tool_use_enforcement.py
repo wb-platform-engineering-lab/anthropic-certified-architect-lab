@@ -1,52 +1,37 @@
 """
-exercise_2_tool_use_enforcement.py — tool_use as the Enforcement Mechanism
+exercise_2_tool_use_enforcement.py — What tool_choice Guarantees (and What It Doesn't)
 
-EXAM NOTE: tool_choice={"type": "tool", "name": "..."} forces the model to
-call a specific tool. stop_reason will always be "tool_use" — the model cannot
-produce a prose reply instead of structured output.
+tool_choice={"type": "tool", "name": "classify_ticket"} forces the model to
+call that tool. stop_reason will always be "tool_use". The model cannot reply
+with prose instead.
 
-But three edge cases survive tool_choice enforcement. This file demonstrates
-all three and shows the handler for each:
+But three things can still go wrong even with tool_choice. This file shows
+each one and its handler.
 
-  Edge case 1 — max_tokens too low:
-    The tool call JSON is truncated mid-stream. stop_reason becomes "max_tokens"
-    instead of "tool_use". The tool input dict is incomplete or missing.
-    Handler: always set max_tokens >= 512 for tool calls; retry on max_tokens.
-
-  Edge case 2 — logical constraint violation:
-    The schema allows a field to be null OR a string, but your business rules
-    say "when decision is escalate, escalation_team MUST be non-null." The API
-    schema cannot express cross-field constraints. The model may still produce
-    decision=escalate with escalation_team=null. The schema passes; your code
-    breaks.
-    Handler: post-schema business rule validation before acting on the result.
-
-  Edge case 3 — context too large:
-    A very long ticket (e.g., a full email thread pasted in) may approach or
-    exceed the model's context window. The API will return a 400 error.
-    Handler: pre-flight token count estimate; truncate if needed before calling.
+  1. max_tokens too low  → tool call JSON is truncated, stop_reason = "max_tokens"
+  2. Business rule fail  → schema passes but cross-field logic is violated
+  3. Input too long      → pre-flight check needed before calling the API
 """
 
-import os
+import json
 from typing import Optional
-
 import anthropic
 from dotenv import load_dotenv
 
 load_dotenv()
-
 client = anthropic.Anthropic()
 
-# ---------------------------------------------------------------------------
-# The v2 classify_ticket tool — same schema as exercise 1.
-# ---------------------------------------------------------------------------
+
+# =============================================================================
+# The tool (same schema as Exercise 1)
+# =============================================================================
+
 CLASSIFY_TOOL = {
     "name": "classify_ticket",
     "description": (
-        "Classify a support ticket. decision must be exactly one of: "
-        "auto_resolve, escalate, needs_info. escalation_team must be non-null "
-        "when escalating; null otherwise. resolution must be non-null when "
-        "auto-resolving; null otherwise."
+        "Classify a support ticket. decision must be one of the three enum values. "
+        "escalation_team: non-null when escalating, null otherwise. "
+        "resolution: non-null when auto-resolving, null otherwise."
     ),
     "input_schema": {
         "type": "object",
@@ -55,413 +40,214 @@ CLASSIFY_TOOL = {
             "decision": {
                 "type": "string",
                 "enum": ["auto_resolve", "escalate", "needs_info"],
-                "description": (
-                    "Exactly one of three values. "
-                    "auto_resolve: ticket can be resolved without human. "
-                    "escalate: requires human review. "
-                    "needs_info: cannot classify without more information."
-                ),
             },
-            "confidence": {
-                "type": "number",
-                "minimum": 0.0,
-                "maximum": 1.0,
-                "description": "Confidence in the decision. Range 0.0 to 1.0.",
-            },
-            "reason": {
-                "type": "string",
-                "description": (
-                    "One or two sentences explaining the decision. "
-                    "Must reference specific facts from the ticket."
-                ),
-            },
+            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "reason": {"type": "string"},
             "escalation_team": {
                 "type": ["string", "null"],
                 "enum": ["billing", "technical", "enterprise", "legal", None],
-                "description": (
-                    "Required and non-null when decision is escalate. "
-                    "Explicitly null when decision is auto_resolve or needs_info."
-                ),
             },
-            "resolution": {
-                "type": ["string", "null"],
-                "description": (
-                    "Customer-facing resolution text. Required and non-null when "
-                    "decision is auto_resolve. Explicitly null otherwise."
-                ),
-            },
+            "resolution": {"type": ["string", "null"]},
         },
     },
 }
 
-SYSTEM_PROMPT = (
-    "You are the Resolve ticket classifier. Classify the support ticket using "
-    "the classify_ticket tool. Be precise about null vs non-null fields."
-)
 
-# ---------------------------------------------------------------------------
-# A normal classification helper — used for comparison and edge case 2.
-# ---------------------------------------------------------------------------
-
-def classify_ticket(ticket: str, max_tokens: int = 512) -> dict:
-    """
-    Standard classification with the v2 tool. Returns the tool input dict.
-    All tool functions return dicts — never raises uncaught exceptions.
-    """
+def classify(ticket: str, max_tokens: int = 512) -> dict:
+    """Standard classification. Returns tool input dict or {"error": ...}."""
     try:
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=max_tokens,
-            system=SYSTEM_PROMPT,
             tools=[CLASSIFY_TOOL],
             tool_choice={"type": "tool", "name": "classify_ticket"},
             messages=[{"role": "user", "content": ticket}],
         )
         if response.stop_reason != "tool_use":
-            return {
-                "error": f"Unexpected stop_reason: {response.stop_reason}",
-                "stop_reason": response.stop_reason,
-            }
+            return {"error": f"stop_reason={response.stop_reason!r} (expected 'tool_use')"}
         return response.content[0].input
     except Exception as e:
         return {"error": str(e)}
 
 
-# ---------------------------------------------------------------------------
-# EDGE CASE 1: max_tokens too low
-# ---------------------------------------------------------------------------
+# =============================================================================
+# Problem 1 — max_tokens too low
+# =============================================================================
 
-def demonstrate_edge_case_1_max_tokens(ticket: str) -> dict:
+def demo_max_tokens_problem(ticket: str) -> None:
     """
-    What happens when max_tokens is too low to complete the tool call?
+    With max_tokens=20, the tool call JSON is truncated mid-stream.
+    stop_reason becomes "max_tokens" instead of "tool_use".
+    The tool input is incomplete or missing.
 
-    The tool call JSON is emitted token by token. If max_tokens is exhausted
-    before the JSON closes, stop_reason becomes "max_tokens" instead of
-    "tool_use". The content block may be a partial tool_use or empty.
-
-    Handler: always set max_tokens >= 512 for tool calls. On max_tokens
-    stop_reason, retry with a higher limit.
+    Fix: always use max_tokens >= 512 for tool calls.
+    If you get stop_reason="max_tokens", retry with a larger budget.
     """
-    try:
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=20,   # deliberately too low — tool call JSON will be truncated
-            system=SYSTEM_PROMPT,
-            tools=[CLASSIFY_TOOL],
-            tool_choice={"type": "tool", "name": "classify_ticket"},
-            messages=[{"role": "user", "content": ticket}],
-        )
-        content_types = [b.type for b in response.content]
-        result = {
-            "stop_reason": response.stop_reason,
-            "content_types": content_types,
-            "handler": "Retry with higher max_tokens. For tool calls, min 512 recommended.",
-            "passed": response.stop_reason == "max_tokens",
-        }
-        return result
-    except Exception as e:
-        return {"error": str(e), "passed": False}
+    print("--- Problem 1: max_tokens too low ---")
+
+    # Intentionally too low
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=20,
+        tools=[CLASSIFY_TOOL],
+        tool_choice={"type": "tool", "name": "classify_ticket"},
+        messages=[{"role": "user", "content": ticket}],
+    )
+    print(f"  With max_tokens=20:  stop_reason = {response.stop_reason!r}")
+    print(f"  content blocks:      {[b.type for b in response.content]}")
+    print()
+
+    # Retry with enough tokens
+    result = classify(ticket, max_tokens=512)
+    if "error" not in result:
+        print(f"  Retry with 512:      stop_reason = 'tool_use', decision = {result['decision']!r}")
+    else:
+        print(f"  Retry error: {result['error']}")
+    print()
+    print("  Fix: detect stop_reason='max_tokens' and retry with max_tokens >= 512")
+    print()
 
 
-def demonstrate_edge_case_1_retry(ticket: str) -> dict:
+# =============================================================================
+# Problem 2 — business rule violation (cross-field logic)
+# =============================================================================
+
+def validate_business_rules(result: dict) -> Optional[str]:
     """
-    Retry handler for edge case 1: detect max_tokens stop and retry.
-    Returns either the tool input dict or an error dict.
+    JSON Schema enforces each field independently.
+    It cannot enforce cross-field rules like "confidence must be >= 0.6
+    when decision is auto_resolve".
+
+    This function checks those rules after schema validation has passed.
+    Returns an error message if a rule is violated, None if all rules pass.
     """
-    try:
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=20,   # intentionally too low to trigger the case
-            system=SYSTEM_PROMPT,
-            tools=[CLASSIFY_TOOL],
-            tool_choice={"type": "tool", "name": "classify_ticket"},
-            messages=[{"role": "user", "content": ticket}],
-        )
+    decision = result.get("decision")
+    confidence = result.get("confidence", 1.0)
+    escalation_team = result.get("escalation_team")
 
-        if response.stop_reason == "max_tokens":
-            # Retry with sufficient tokens.
-            response = client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=512,
-                system=SYSTEM_PROMPT,
-                tools=[CLASSIFY_TOOL],
-                tool_choice={"type": "tool", "name": "classify_ticket"},
-                messages=[{"role": "user", "content": ticket}],
-            )
-
-        if response.stop_reason == "tool_use":
-            return {"result": response.content[0].input, "retried": True}
-
-        return {"error": f"Unexpected stop_reason after retry: {response.stop_reason}"}
-    except Exception as e:
-        return {"error": str(e)}
-
-
-# ---------------------------------------------------------------------------
-# EDGE CASE 2: logical constraint violation (cross-field business rules)
-# ---------------------------------------------------------------------------
-
-def validate_business_rules(tool_input: dict) -> Optional[str]:
-    """
-    Post-schema business rule validation.
-
-    The JSON schema cannot express cross-field constraints like "escalation_team
-    must be non-null IF decision is escalate." These rules live here, AFTER
-    schema validation has already passed.
-
-    Returns an error string describing the violation, or None if valid.
-    """
-    decision = tool_input.get("decision")
-    confidence = tool_input.get("confidence", 1.0)
-    escalation_team = tool_input.get("escalation_team")
-    resolution = tool_input.get("resolution")
-
-    # Rule 1: auto_resolve requires confidence >= 0.6.
-    # The schema allows confidence 0.0-1.0; business rules narrow the range
-    # for the auto_resolve case specifically.
+    # Rule: auto_resolve needs confidence >= 0.6
     if decision == "auto_resolve" and confidence < 0.6:
         return (
-            f"Business rule violation: decision is auto_resolve but confidence "
-            f"is {confidence:.2f} (below 0.6 threshold). Must escalate or "
-            f"request more info when confidence is this low."
+            f"auto_resolve with confidence={confidence:.2f} is too low. "
+            f"Minimum is 0.6. Change decision to 'needs_info' or raise confidence."
         )
 
-    # Rule 2: escalate requires a non-null escalation_team.
-    # The schema allows escalation_team to be null; business rules forbid it
-    # on escalation decisions because the router needs a team to route to.
+    # Rule: escalate needs a team
     if decision == "escalate" and escalation_team is None:
-        return (
-            "Business rule violation: decision is escalate but escalation_team "
-            "is null. The routing service requires a team for all escalations."
-        )
+        return "escalate requires escalation_team to be non-null."
 
-    # Rule 3: auto_resolve requires a non-null resolution text.
-    # The schema allows resolution to be null; business rules require text
-    # so the system can send a reply to the customer.
-    if decision == "auto_resolve" and resolution is None:
-        return (
-            "Business rule violation: decision is auto_resolve but resolution "
-            "is null. The system cannot send a reply without resolution text."
-        )
-
-    return None  # All rules pass.
+    return None  # all rules pass
 
 
-def demonstrate_edge_case_2_business_rules() -> dict:
+def demo_business_rules(ticket: str) -> None:
     """
-    Submit an ambiguous ticket where the model might auto_resolve with low
-    confidence. Show post-schema validation catching the rule violation.
-
-    This ticket is intentionally vague — it could auto-resolve or need info.
-    We prompt the system to lean toward auto-resolve to trigger the confidence
-    rule in test conditions.
+    Even with a valid schema response, cross-field business rules can fail.
+    The validator runs after the API call, before routing.
     """
-    # Deliberately ambiguous ticket — the model is uncertain.
-    ticket = (
-        "Hey, I'm not sure if my account is working right? "
-        "Sometimes it logs me out. Maybe it's my browser? "
-        "Or is there an issue your end? Not urgent."
-    )
-
-    result = classify_ticket(ticket)
-
+    print("--- Problem 2: business rule violation ---")
+    result = classify(ticket)
     if "error" in result:
-        return {"error": result["error"], "passed": False}
+        print(f"  API error: {result['error']}")
+        return
 
     violation = validate_business_rules(result)
-    return {
-        "decision": result.get("decision"),
-        "confidence": result.get("confidence"),
-        "escalation_team": result.get("escalation_team"),
-        "resolution": result.get("resolution"),
-        "business_rule_violation": violation,
-        # PASS means the validator ran and caught a potential issue OR
-        # correctly passed a valid classification.
-        "passed": True,
-        "note": (
-            "Violation detected and caught before routing."
-            if violation
-            else "No violation — classification is logically consistent."
-        ),
-    }
+    print(f"  decision:    {result.get('decision')!r}")
+    print(f"  confidence:  {result.get('confidence')}")
+    print(f"  Schema OK?   yes (enum and range enforced by API)")
+
+    if violation:
+        print(f"  Rule check:  FAIL — {violation}")
+        print("  Action:      send structured error back to model, retry")
+    else:
+        print(f"  Rule check:  PASS — logically consistent")
+    print()
 
 
-# ---------------------------------------------------------------------------
-# EDGE CASE 3: pre-flight token check
-# ---------------------------------------------------------------------------
+# =============================================================================
+# Problem 3 — input too long
+# =============================================================================
 
-def count_tokens(text: str) -> int:
+def classify_with_preflight(ticket: str) -> dict:
     """
-    Estimate token count for a text string.
-    Heuristic: ~4 characters per token (rough average for English prose).
-    For production use, call client.beta.messages.count_tokens() instead.
+    For very long inputs (pasted email threads, log dumps), estimate the token
+    count before calling the API. Truncate if needed to avoid a 400 error.
+
+    Heuristic: ~4 characters per token. For production, use
+    client.beta.messages.count_tokens() for an exact count.
     """
-    return len(text) // 4
+    MODEL_CONTEXT = 200_000  # claude-haiku-4-5 context window
+    OUTPUT_BUDGET = 512       # tokens reserved for the tool call response
+    MAX_INPUT = MODEL_CONTEXT - OUTPUT_BUDGET
 
-
-def classify_with_preflight(ticket: str, model_context_limit: int = 200000) -> dict:
-    """
-    Pre-flight token check before calling the API.
-
-    Haiku context window is 200,000 tokens. We reserve 2,048 for the output
-    (tool call JSON + any prose). If the input exceeds the limit, we truncate
-    using a head+tail strategy to preserve both the start of the thread (where
-    the original issue is stated) and the end (where the most recent state is).
-
-    All tool functions return dicts — never raises uncaught exceptions.
-    """
-    MAX_INPUT_TOKENS = model_context_limit - 2048  # reserve for output
-
-    estimated_tokens = count_tokens(ticket)
+    estimated = len(ticket) // 4
     was_truncated = False
 
-    if estimated_tokens > MAX_INPUT_TOKENS:
-        # Truncate strategy: take first 80% and last 20% of character budget.
-        # This preserves the original issue statement (head) and the most
-        # recent customer message (tail) while dropping the middle thread.
-        chars_limit = MAX_INPUT_TOKENS * 4
-        head = ticket[: int(chars_limit * 0.8)]
-        tail = ticket[int(-chars_limit * 0.2) :]
-        ticket = head + "\n[... truncated for context window ...]\n" + tail
+    if estimated > MAX_INPUT:
+        # Keep first 80% (original issue) + last 20% (most recent message)
+        char_limit = MAX_INPUT * 4
+        head = ticket[:int(char_limit * 0.8)]
+        tail = ticket[int(-char_limit * 0.2):]
+        ticket = head + "\n[... truncated ...]\n" + tail
         was_truncated = True
 
-    try:
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=512,
-            system=SYSTEM_PROMPT,
-            tools=[CLASSIFY_TOOL],
-            tool_choice={"type": "tool", "name": "classify_ticket"},
-            messages=[{"role": "user", "content": ticket}],
-        )
-        if response.stop_reason != "tool_use":
-            return {
-                "error": f"Unexpected stop_reason: {response.stop_reason}",
-                "was_truncated": was_truncated,
-            }
-        result = response.content[0].input
-        result["was_truncated"] = was_truncated
-        result["estimated_input_tokens"] = estimated_tokens
-        return result
-    except Exception as e:
-        return {"error": str(e), "was_truncated": was_truncated}
+    result = classify(ticket)
+    result["was_truncated"] = was_truncated
+    result["estimated_tokens"] = estimated
+    return result
 
 
-def demonstrate_edge_case_3_preflight() -> dict:
-    """
-    Build a very long ticket (simulating a pasted email thread) and show
-    the pre-flight check truncating it before the API call.
-    """
-    # Build a synthetic long ticket — 2000 repetitions of a short sentence
-    # simulates a large email thread pasted into the ticket body.
-    base_message = (
-        "On 2024-01-15, customer wrote: I am still having the issue with my "
-        "invoice. Please advise. Support replied: We are looking into it. "
-    )
-    long_ticket = base_message * 2000  # ~200k+ characters = ~50k+ tokens
+def demo_preflight() -> None:
+    """Show the pre-flight check truncating a very long ticket."""
+    print("--- Problem 3: input too long ---")
 
-    estimated = count_tokens(long_ticket)
-    result = classify_with_preflight(long_ticket, model_context_limit=200000)
+    # Simulate a 500-message email thread pasted into a ticket
+    long_ticket = ("Customer: still not resolved. Support: looking into it. ") * 4000
 
-    return {
-        "original_estimated_tokens": estimated,
-        "was_truncated": result.get("was_truncated", False),
-        "decision": result.get("decision", "error"),
-        "passed": result.get("was_truncated", False) and "error" not in result,
-        "note": "Pre-flight detected oversized input and truncated before API call.",
-    }
+    estimated = len(long_ticket) // 4
+    print(f"  Ticket size: ~{estimated:,} estimated tokens")
+    print(f"  Calling classify_with_preflight()...")
+
+    result = classify_with_preflight(long_ticket)
+    print(f"  was_truncated: {result.get('was_truncated')}")
+    print(f"  decision:      {result.get('decision', result.get('error', 'error'))!r}")
+    print()
+    print("  Fix: estimate tokens before the call, truncate head+tail if needed")
+    print()
 
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # main
-# ---------------------------------------------------------------------------
+# =============================================================================
 
 def main() -> None:
-    sample_ticket = (
+    ticket = (
         "My payment failed three times today but I can see the charges on my "
-        "bank statement. I need this resolved immediately — I have a meeting "
-        "in two hours that depends on access to the premium features."
+        "bank statement. I need this resolved — I have a meeting in two hours."
     )
 
-    print("=" * 70)
-    print("EXERCISE 2: tool_use Enforcement — Three Surviving Edge Cases")
-    print("=" * 70)
+    ambiguous_ticket = (
+        "Hey, I'm not sure if my account is working right? "
+        "Sometimes it logs me out. Maybe my browser? Not urgent."
+    )
+
+    print("=" * 65)
+    print("Exercise 2: What tool_choice Guarantees (and What It Doesn't)")
+    print("=" * 65)
+    print()
+    print("tool_choice guarantees stop_reason='tool_use' and a schema-valid")
+    print("tool input. These three problems survive that guarantee.")
     print()
 
-    # ------------------------------------------------------------------
-    # Edge case 1: max_tokens too low
-    # ------------------------------------------------------------------
-    print("--- Edge Case 1: max_tokens Too Low ---")
-    print("Calling API with max_tokens=20 (tool call JSON will be truncated)...")
-    ec1 = demonstrate_edge_case_1_max_tokens(sample_ticket)
-    stop = ec1.get("stop_reason")
-    content_types = ec1.get("content_types", [])
-    print(f"  stop_reason:    {stop!r}")
-    print(f"  content_types:  {content_types}")
-    print(f"  Handler:        {ec1.get('handler')}")
+    demo_max_tokens_problem(ticket)
+    demo_business_rules(ambiguous_ticket)
+    demo_preflight()
 
-    if ec1.get("passed"):
-        print("  PASS: stop_reason was 'max_tokens' as expected.")
-    else:
-        print(f"  UNEXPECTED: stop_reason was '{stop}' — model may have finished in 20 tokens.")
-    print()
-
-    print("  Retrying with automatic max_tokens correction...")
-    ec1_retry = demonstrate_edge_case_1_retry(sample_ticket)
-    if "result" in ec1_retry:
-        print(f"  Retry decision:  {ec1_retry['result'].get('decision')!r}")
-        print(f"  Retried:         {ec1_retry.get('retried')}")
-        print("  PASS: Retry produced valid tool output.")
-    else:
-        print(f"  Error: {ec1_retry.get('error')}")
-    print()
-
-    # ------------------------------------------------------------------
-    # Edge case 2: business rule violation
-    # ------------------------------------------------------------------
-    print("--- Edge Case 2: Logical Constraint Violation ---")
-    print("Submitting ambiguous ticket — checking post-schema business rules...")
-    ec2 = demonstrate_edge_case_2_business_rules()
-
-    if "error" in ec2:
-        print(f"  API Error: {ec2['error']}")
-    else:
-        print(f"  decision:             {ec2.get('decision')!r}")
-        print(f"  confidence:           {ec2.get('confidence')}")
-        print(f"  escalation_team:      {ec2.get('escalation_team')!r}")
-        violation = ec2.get("business_rule_violation")
-        if violation:
-            print(f"  RULE VIOLATION:       {violation}")
-            print("  PASS: Business rule validator caught the problem before routing.")
-        else:
-            print(f"  No violation:         {ec2.get('note')}")
-            print("  PASS: Classification is logically consistent with business rules.")
-    print()
-
-    # ------------------------------------------------------------------
-    # Edge case 3: pre-flight token check
-    # ------------------------------------------------------------------
-    print("--- Edge Case 3: Pre-flight Token Check ---")
-    print("Building synthetic oversized ticket (~50k+ tokens)...")
-    ec3 = demonstrate_edge_case_3_preflight()
-    print(f"  Original estimated tokens:  {ec3.get('original_estimated_tokens'):,}")
-    print(f"  Was truncated:              {ec3.get('was_truncated')}")
-    print(f"  Decision after truncation:  {ec3.get('decision')!r}")
-
-    if ec3.get("passed"):
-        print("  PASS: Pre-flight truncated input; API call succeeded.")
-    else:
-        print(f"  FAIL or error — check output above.")
-    print()
-
-    print("=" * 70)
-    print("Exercise 2 complete.")
-    print()
-    print("Summary of three surviving edge cases:")
-    print("  1. max_tokens too low   → detect via stop_reason, retry with 512+")
-    print("  2. Logical constraint   → post-schema validate_business_rules()")
-    print("  3. Context too large    → pre-flight count_tokens(), truncate head+tail")
-    print("=" * 70)
+    print("=" * 65)
+    print("Summary:")
+    print("  1. max_tokens too low → retry with >= 512")
+    print("  2. Business rules     → validate cross-field logic after the API call")
+    print("  3. Input too long     → estimate tokens, truncate before calling")
+    print("=" * 65)
 
 
 if __name__ == "__main__":
