@@ -1,21 +1,20 @@
 # Week 6 Lab — Tool Design & MCP Integration
 
-> **Resolve context:** The CRM tool returned `{}` when the CRM was down. The model interpreted silence as a clean slate and told 43 customers their billing was fine. The fix was not a better prompt — it was a better tool. This week you redesign every tool in the integration layer and then lift the most important ones into proper MCP servers with clear capability boundaries.
+> **Resolve context:** The CRM tool returned `{}` when the CRM was down. The model interpreted silence as a clean slate and told 43 customers their billing was fine. The fix was not a better prompt — it was a better tool. This week you redesign every tool in the integration layer, then lift the most important ones into MCP servers with clear capability boundaries.
 
 ## Learning Objectives
 
-- Write tool descriptions that give the model everything it needs to call the tool correctly — and know when not to call it
-- Implement the three-response-shape pattern: success / access_failure / empty result
-- Understand MCP architecture: what a server is, what a transport is, how tools are registered and discovered
-- Design MCP server boundaries that prevent wrong-tool-call mistakes structurally
-- Configure Claude Code to use an MCP server and understand the difference between `stdio` and `SSE` transports
+- Write tool descriptions that tell the model exactly when to call a tool, what each response means, and what to do on failure
+- Implement the three-response-shape pattern: success / access_failure / empty
+- Understand MCP architecture: what a server is, what a transport is, how tools are discovered
+- Configure Claude Code to use an MCP server and understand `stdio` vs `SSE` transports
+- Know the five Claude Code built-in tools and when a custom MCP tool is required instead
 
 ## Prerequisites
 
-- Week 1 Exercise 4 completed — you have seen the `{}` failure mode and the typed response fix
 - Anthropic SDK installed (`pip install anthropic python-dotenv`)
 - MCP SDK installed: `pip install mcp` (Exercises 3–4)
-- SSE server deps installed: `pip install starlette uvicorn` (Exercise 4 only)
+- SSE server deps: `pip install starlette uvicorn` (Exercise 4 only)
 - `.env` with `ANTHROPIC_API_KEY`
 
 ---
@@ -26,96 +25,72 @@
 
 **File:** `exercise_1_tool_descriptions.py`
 
-**Goal:** Rewrite Resolve's integration tool descriptions using the four-part template and measure the effect on model behaviour during a simulated CRM outage.
-
-**Scenario:** Resolve's original tool descriptions were one-liners copied from function docstrings. They said what the tool does but not when to call it, what each response shape means, or what to do on failure. The model guessed — and guessed wrong.
+**Goal:** See how the four-part tool description template changes model behaviour during a CRM outage — same tool implementation, different description.
 
 #### The four-part template
 
-```python
-DESCRIPTION_TEMPLATE = """
-  1. WHAT: One sentence on what the tool does.
-  2. WHEN: When to call it — and when NOT to call it.
-  3. SHAPES: What each response status means (success / access_failure / empty).
-  4. ON FAILURE: What the agent must do when status is access_failure.
-"""
+```
+WHAT:       One sentence on what the tool does.
+WHEN:       When to call it — and when NOT to call it.
+SHAPES:     What each response status means (success / empty / access_failure).
+ON FAILURE: What the agent must do when status is access_failure.
 ```
 
-#### Old description — one liner, says nothing useful
+#### Old description — one liner
 
 ```python
-{
-    "name": "get_account_status",
-    "description": "Gets the account status for a customer.",
-    ...
-}
+{"name": "get_account_status", "description": "Gets the account status for a customer."}
 ```
 
-What the model does when this returns `access_failure` during a CRM outage: it inspects the payload, finds no data it recognises as an error, and proceeds to draft a reply. Result: customer told their billing is fine during a system outage.
+When the CRM returns `access_failure`, the model finds nothing alarming in the payload, assumes the account is fine, and proceeds to draft a reply.
 
-#### New description — four-part, actionable
+#### New description — four-part
 
 ```python
 {
     "name": "get_account_status",
     "description": (
-        "WHAT: Retrieves the current account status, plan tier, and authentication "
-        "state for a customer from the CRM system.\n"
-        "WHEN: Call this first before any account-related action. Do NOT call this "
-        "more than once per ticket — the result is cached for the session.\n"
+        "WHAT: Retrieves the current account status, plan tier, and auth state.\n"
+        "WHEN: Call this before any account-related action. Do NOT call more than once per ticket.\n"
         "SHAPES:\n"
-        "  status=success: account found, payload contains plan, active, auth_state.\n"
-        "  status=empty: no CRM record for this customer_id. Do NOT proceed — ask "
-        "    the customer to verify their account email before continuing.\n"
-        "  status=access_failure: CRM system is unavailable. ESCALATE immediately "
-        "    to the technical team. Do NOT draft a reply without this data.\n"
-        "ON FAILURE: If status is access_failure, stop and escalate. Never tell "
-        "a customer their account is fine when you could not verify it."
+        "  status=success: account found, payload has plan/active/auth_state.\n"
+        "  status=empty: no CRM record. Ask the customer to verify their email.\n"
+        "  status=access_failure: CRM unavailable. ESCALATE immediately.\n"
+        "    Do NOT draft a reply without verified account data.\n"
+        "ON FAILURE: If access_failure, stop and escalate. Never tell a customer "
+        "their account is fine when you could not verify it."
     ),
     ...
 }
 ```
 
-What the model does when this returns `access_failure`: it reads the `ON FAILURE` instruction and escalates rather than proceeding.
-
-#### The `draft_reply` sequencing rule
-
-The `draft_reply` description uses the WHEN section to encode a prerequisite:
-
-```python
-"WHEN: Call this LAST — only after get_account_status has returned "
-"status=success. NEVER call draft_reply if get_account_status returned "
-"access_failure. This tool should be called at most once per ticket."
-```
-
-This does not structurally prevent the model from calling `draft_reply` first — only a `PreCallHook` can do that. But it dramatically reduces the frequency of out-of-order calls. The description is your cheapest guardrail.
+When the CRM returns `access_failure` with this description, the model reads the `ON FAILURE` instruction and escalates instead of proceeding.
 
 #### What to observe
 
-Run the script. For the three CRM-failure tickets (t04, t05, t09), compare the `escalated` field between old and new tools:
+Run the script. For the two CRM-failure tickets (t03, t04), compare `escalated` between old and new:
 
 ```
-Ticket  CRM Fails  Old: escalated  New: escalated
-t04     YES        False           True
-t05     YES        False           True
-t09     YES        False           True
+Ticket  CRM down  Old: escalated  New: escalated
+t03     YES       False           True
+t04     YES       False           True
 ```
 
-Same tool implementation, different description — different behaviour.
+Same tool implementation. Different description. Different behaviour.
 
 #### Questions to answer before moving on
 
-1. Why does the WHEN section of a tool description affect model behaviour more than the WHAT section?
-2. What is the difference between a description that says "escalate on failure" and a `PreCallHook` that checks for failure?
-3. The `draft_reply` description says "call this last". Is this sufficient to prevent the model from calling it first?
+1. Why does the WHEN section of a description affect model behaviour more than the WHAT section?
+2. What is the difference between a description that says "escalate on failure" and a `PreCallHook` that blocks the call?
+3. Is the WHEN section of `draft_reply` ("call this last") sufficient to prevent out-of-order calls?
 
 #### Try it
 
-Add a fifth tool: `send_email(customer_id, subject, body)`. Write a four-part description that makes it clear this sends a real email (no undo) and should only be called after `draft_reply` has returned `status=success`. Observe whether the model respects the ordering without a hook.
+Add a third tool: `send_email(customer_id, subject, body)`. Write a four-part description that makes clear this sends a real email (no undo) and should only be called after `draft_reply` returns success.
 
 #### Exam rule
 
-> The tool description is the model's only documentation at call time. If the description does not state what to do on `access_failure`, the model will make a reasonable-sounding guess — and that guess will be wrong in ways that are hard to predict. The four-part template (WHAT / WHEN / SHAPES / ON FAILURE) covers every decision the model needs to make about when and how to use the tool.
+> The tool description is the model's only documentation at call time. If it does not state what to do on `access_failure`, the model guesses — and guesses wrong. The four-part template (WHAT / WHEN / SHAPES / ON FAILURE) covers every decision the model needs to make about when and how to use the tool.
 
 ---
 
@@ -123,120 +98,87 @@ Add a fifth tool: `send_email(customer_id, subject, body)`. Write a four-part de
 
 **File:** `exercise_2_three_response_shapes.py`
 
-**Goal:** Implement the three-response-shape pattern as typed dataclasses and verify that each shape produces the correct model routing.
-
-**Scenario:** After the Chapter 4 incident, Resolve's rule became: every tool returns one of three explicitly typed shapes. The model checks `status` first — always — and routes before inspecting the payload.
+**Goal:** Implement the three-response-shape pattern and verify each shape produces the correct model routing.
 
 #### The three shapes
 
 ```python
-@dataclass
-class SuccessResponse:
-    status: str = "success"
-    data: dict = None           # meaningful result data
+# status="success" — system responded, payload has meaningful data
+{"status": "success", "plan": "Pro", "active": True, ...}
 
-@dataclass
-class AccessFailureResponse:
-    code: str                   # machine-readable error code
-    message: str                # human-readable, includes routing instruction
-    status: str = "access_failure"
+# status="access_failure" — system unavailable, do not proceed
+{"status": "access_failure", "code": "CRM_TIMEOUT", "message": "CRM did not respond."}
 
-@dataclass
-class EmptyResultResponse:
-    message: str                # explains what was searched and not found
-    status: str = "empty"
+# status="empty" — system responded but found nothing
+{"status": "empty", "message": "No CRM record found. Ask customer to verify email."}
 ```
 
-Each has a `to_dict()` method. The `status` key is always present — the model routes on it before touching any other field.
+The `status` key is always present. The model routes on it before inspecting any other field.
 
-#### The routing the model performs
+#### The routing rule
 
 ```
-Tool returns result
-      ↓
-result["status"] == ?
-  ├── "success"        → use result data, continue processing
-  ├── "empty"          → handle absence (ask for more info, or note "none found")
-  └── "access_failure" → stop, escalate, NEVER proceed with missing data
+status="success"        → use the data, continue
+status="empty"          → handle the absence (ask for more info or note "none found")
+status="access_failure" → stop, escalate, NEVER proceed with missing data
 ```
 
 #### Why `{}` is dangerous
 
 ```python
-# The CRM outage response — the original bug
-def get_account_status_v1(customer_id: str, crm_is_down: bool = False) -> dict:
-    if crm_is_down:
-        return {}   # empty dict — no status field
+# Original bug — CRM timeout returned empty dict
+def get_account_status(customer_id, crm_down=False):
+    if crm_down:
+        return {}   # no status field
 
-# What the model sees: {}
-# What the model does: inspects payload, finds nothing alarming, continues
-# Result: 43 customers told their billing is fine during a CRM outage
+# Model sees {}, finds nothing alarming, proceeds
+# Result: 43 customers told their billing was fine during a CRM outage
 
-# The fixed response
-def get_account_status_v2(customer_id: str, crm_is_down: bool = False) -> dict:
-    if crm_is_down:
-        return AccessFailureResponse(
-            code="CRM_TIMEOUT",
-            message="CRM did not respond. Do not proceed without account verification.",
-        ).to_dict()
-    # {"status": "access_failure", "code": "CRM_TIMEOUT", "message": "..."}
+# Fix — return typed access_failure
+def get_account_status(customer_id, crm_down=False):
+    if crm_down:
+        return {
+            "status": "access_failure",
+            "code": "CRM_TIMEOUT",
+            "message": "CRM did not respond. Do not proceed.",
+        }
 ```
-
-#### The `partial_result` decision
-
-The exercise includes an inline comment making the case for merging `partial_result` into `access_failure`:
-- Partial data is worse than no data for routing decisions (the model may act on 3 of 10 invoices and miss the duplicate in invoice 7)
-- A fourth shape means the model must learn four routing rules — increasing the chance of misrouting
-- Exception: if the system can reliably quantify what percentage of data is present and the action is safe on partial data, `partial_result` may be justified
 
 #### What to observe
 
-Run the three demo tickets. For each shape, the `verify_routing()` function checks:
+Run the script with 3 demo tickets — one per shape. The `scenario` parameter forces each shape so you can observe routing without a real CRM outage:
 
 ```
-demo_success        → model uses account data, drafts reply          PASS
-demo_empty          → model asks customer to verify account email    PASS
-demo_access_failure → model escalates, does NOT draft reply         PASS
+demo_success        → model uses account data, replies normally
+demo_empty          → model asks customer to verify email
+demo_access_failure → model escalates, does NOT draft a reply
 ```
 
 #### Questions to answer before moving on
 
 1. What does the model do when a tool returns `{}`? Why?
-2. Name the three valid `status` values and the action associated with each.
-3. When is a fourth shape (`partial_result`) justified? When is it not?
+2. Name the three valid `status` values and the agent action for each.
+3. What is the difference between `"empty"` and `"access_failure"`?
 
 #### Try it
 
-Add a tool that intentionally returns `{}` for a simulated failure (reproducing the original bug). Run it against a ticket. Verify the model proceeds incorrectly. Then fix the tool to return `AccessFailureResponse` and verify it escalates.
+Change the `demo_success` ticket to pass `scenario="access_failure"` and run again. Confirm the model now escalates instead of replying.
 
 #### Exam rule
 
-> Every tool must return a `status` field. Valid values: `"success"`, `"access_failure"`, `"empty"`. `"access_failure"` means the system was unavailable — stop and escalate. `"empty"` means the system responded but found nothing — handle the absence. An empty dict `{}` has no `status` field and is the root cause of the Chapter 4 incident.
+> Every tool must return a `status` field with one of three values: `"success"`, `"access_failure"`, `"empty"`. The model routes on `status` first. An empty dict `{}` has no `status` field and is the root cause of the Chapter 4 incident.
 
 ---
 
 ### Exercise 3 — Building Your First MCP Server
 
-**Files:** `exercise_3_crm_server.py`, `exercise_3_crm_demo.py`, `.claude/mcp_settings.json`
+**Files:** `exercise_3_crm_server.py`, `exercise_3_crm_demo.py`
 
-**Goal:** Move Resolve's CRM integration from inline tool definitions to a standalone MCP server, and understand how capability boundaries work structurally.
+**Goal:** Move Resolve's CRM integration from inline tool definitions to a standalone MCP server. Understand how capability boundaries work structurally.
 
 #### What an MCP server is
 
-An MCP server is a process that exposes tools via a standardised protocol. Claude Code discovers servers from `.claude/mcp_settings.json` and calls their tools exactly like inline tools.
-
-```
-Claude Code
-    │
-    ├── reads .claude/mcp_settings.json
-    ├── spawns: python exercise_3_crm_server.py   (stdio process)
-    │         │
-    │         ├── tool: get_account_status
-    │         ├── tool: update_contact_notes
-    │         └── tool: list_open_tickets
-    │
-    └── connects to: http://127.0.0.1:8001/sse    (SSE server — Exercise 4)
-```
+An MCP server is a process that exposes tools via a standard protocol. Claude Code discovers it from `.claude/mcp_settings.json` and calls its tools exactly like inline tools.
 
 #### The server — key structure
 
@@ -254,9 +196,9 @@ async def list_tools():
         types.Tool(
             name="get_account_status",
             description="WHAT: ... WHEN: ... SHAPES: ... ON FAILURE: ...",
-            inputSchema={"type": "object", "properties": {"customer_id": {"type": "string"}}, "required": ["customer_id"]},
+            inputSchema={"type": "object", "properties": {"customer_id": {"type": "string"}},
+                         "required": ["customer_id"]},
         ),
-        # update_contact_notes, list_open_tickets
     ]
 
 @server.call_tool()
@@ -266,20 +208,18 @@ async def call_tool(name: str, arguments: dict):
 
 async def main():
     async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream,
-                         server.create_initialization_options())
+        await server.run(read_stream, write_stream, server.create_initialization_options())
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
 ```
 
 #### `stdio` transport
 
 `stdio_server()` — the server reads JSON-RPC from stdin and writes to stdout. Claude Code spawns it as a child process.
 
-**Use stdio when:** local process, single client, no network needed. This is the correct default.
+**Use stdio when:** local process, single client, no network needed. This is the right default.
 
-**Do not use stdio when:** multiple clients, remote deployment. Use SSE for those.
+**Use SSE when:** multiple clients, remote deployment, or shared service.
 
 #### Read-only mode — capability restriction at the server level
 
@@ -287,29 +227,17 @@ if __name__ == "__main__":
 CRM_READ_ONLY=true python exercise_3_crm_server.py
 ```
 
-With `CRM_READ_ONLY=true`, `update_contact_notes` returns:
-```python
-{"status": "access_failure", "code": "READ_ONLY_MODE",
- "message": "Server is in read-only mode. update_contact_notes is disabled."}
-```
-
-The restriction is enforced in the server — not via a prompt instruction. The model cannot circumvent it.
+With `CRM_READ_ONLY=true`, `update_contact_notes` returns `access_failure` with `code=READ_ONLY_MODE`. The restriction is enforced in the server — the model cannot circumvent it via prompt.
 
 #### Registering with Claude Code
 
 ```json
-// .claude/mcp_settings.json
 {
   "mcpServers": {
     "resolve-crm": {
       "command": "python",
       "args": ["exercise_3_crm_server.py"],
-      "env": {"CRM_READ_ONLY": "false"}
-    },
-    "resolve-crm-readonly": {
-      "command": "python",
-      "args": ["exercise_3_crm_server.py"],
-      "env": {"CRM_READ_ONLY": "true"}
+      "env": {}
     }
   }
 }
@@ -317,38 +245,37 @@ The restriction is enforced in the server — not via a prompt instruction. The 
 
 #### The boundary effect (`exercise_3_crm_demo.py`)
 
-The demo registers only CRM tool schemas — no billing tools. A billing question cannot produce a `get_billing_history` tool call because the tool is not registered. The model either says it cannot help or uses the available CRM tools to answer what it can.
+The demo runs 3 scenarios using the Anthropic SDK directly (no MCP infrastructure needed):
+
+1. Read account status — verifies `get_account_status` is called
+2. Add a note — verifies `update_contact_notes` is called
+3. Billing question with only CRM tools registered — model cannot call billing tools
 
 ```python
-# Only these tools exist in this session:
-tools = [GET_ACCOUNT_STATUS_SCHEMA, UPDATE_NOTES_SCHEMA, LIST_TICKETS_SCHEMA]
-
-# Billing question
-response = client.messages.create(tools=tools,
-    messages=[{"role": "user", "content": "What is my billing history?"}])
-
-# Model CANNOT call get_billing_history — it is not registered.
-# Capability boundary is structural, not a prompt instruction.
+# Only CRM tools are registered
+result = run_agent("Show me invoices for cust_001", tools=CRM_TOOLS)
+# Model cannot call get_billing_history — it is not registered
+# This is structural safety, not a prompt instruction
 ```
 
 #### What to observe
 
-Run `exercise_3_crm_demo.py` — no MCP infrastructure needed. For the boundary demo, check that `response` contains no `get_billing_history` tool calls.
+Run `exercise_3_crm_demo.py`. For Scenario 3, check that no `billing_*` tool appears in `tool_calls`.
 
 #### Questions to answer before moving on
 
 1. What does `stdio_server()` mean for how the server communicates?
 2. How does Claude Code discover MCP servers in a project?
-3. The `CRM_READ_ONLY` mode disables write tools at the server level. Why is this safer than a prompt instruction?
+3. The `CRM_READ_ONLY` flag disables write tools at the server level. Why is this safer than a prompt instruction?
 4. Why can't the model call `get_billing_history` when only CRM tools are registered?
 
 #### Try it
 
-Register both `resolve-crm` and `resolve-crm-readonly` in `.claude/mcp_settings.json`. In Claude Code, try `update_contact_notes` with each. Verify the readonly server returns `access_failure`.
+Register the server in `.claude/mcp_settings.json`. Open Claude Code and ask: "What is the account status for cust_001?" — Claude Code will call the tool via MCP automatically.
 
 #### Exam rule
 
-> MCP servers are discovered via `.claude/mcp_settings.json`. `stdio` transport means the server communicates over stdin/stdout — correct for local single-client use. What is not registered cannot be called: the capability boundary is structural.
+> MCP servers are discovered via `.claude/mcp_settings.json`. `stdio` transport means stdin/stdout — correct for local single-client use. What is not registered cannot be called: the capability boundary is structural, not a prompt instruction.
 
 ---
 
@@ -356,7 +283,7 @@ Register both `resolve-crm` and `resolve-crm-readonly` in `.claude/mcp_settings.
 
 **File:** `exercise_4_billing_server.py`
 
-**Goal:** Build the billing MCP server with SSE transport, namespaced read/write tools, typed error responses, and a `server_info` discovery tool.
+**Goal:** Build a billing MCP server with SSE transport, namespaced read/write tools, typed error responses, and a `server_info` discovery tool.
 
 #### SSE vs `stdio`
 
@@ -367,7 +294,7 @@ Register both `resolve-crm` and `resolve-crm-readonly` in `.claude/mcp_settings.
 | Network | No | Yes |
 | Right for | Local single-client | Remote or multi-client |
 
-The billing server uses SSE because the billing system is shared across multiple agent instances in production.
+The billing server uses SSE because the billing system is shared across multiple agent instances.
 
 #### Read/write namespace separation
 
@@ -378,48 +305,40 @@ The billing server uses SSE because the billing system is shared across multiple
 "billing_write.apply_credit"
 ```
 
-Operators grant read access broadly, write access narrowly — without any server code changes.
+Operators grant read access broadly, write access narrowly — without changing server code.
 
 #### Write tool description pattern
 
 ```python
 "description": (
     "WHAT: Issues a refund for a specific charge.\n"
-    "WHEN: Call only when the customer explicitly requests a refund AND "
-    "billing_read.get_billing_summary has confirmed the charge. "
-    "WRITE OPERATION: modifies billing data. Only call when explicitly "
-    "requested by the customer.\n"
+    "WHEN: Call only when the customer explicitly requests a refund. "
+    "WRITE OPERATION: modifies billing data.\n"
     "ON FAILURE: Do not retry. Escalate to billing team with the charge_id."
 )
 ```
 
-The `WRITE OPERATION` warning in the description reduces accidental write calls.
+The `WRITE OPERATION` warning reduces accidental write calls.
 
 #### Typed errors — never throw exceptions
 
 ```python
-# WRONG: exception thrown out of the handler
-async def issue_refund(customer_id, charge_id, amount):
-    if amount > 500:
-        raise ValueError("Amount exceeds limit")   # model receives opaque MCP error
+# WRONG — model receives opaque MCP error with no routing information
+if amount > 500:
+    raise ValueError("Amount exceeds limit")
 
-# CORRECT: typed access_failure returned
-async def issue_refund(customer_id, charge_id, amount):
-    if amount <= 0 or amount > 500:
-        return {"status": "access_failure", "code": "INVALID_AMOUNT",
-                "message": f"Amount {amount} must be between 0 and 500."}
+# CORRECT — typed access_failure the model can route on
+if amount > 500:
+    return {"status": "access_failure", "code": "AMOUNT_EXCEEDS_LIMIT",
+            "message": f"Amount {amount} exceeds the maximum allowed refund of 500."}
 ```
-
-An uncaught exception produces an opaque MCP error with no routing information. A typed `access_failure` gives the model what it needs to escalate correctly.
 
 #### The `server_info` discovery tool
 
 ```python
-# Call before planning a billing workflow
 server_info()
 → {
     "status": "success",
-    "server": "resolve-billing",
     "capabilities": {
         "billing_read": ["billing_read.get_billing_summary", "billing_read.list_invoices"],
         "billing_write": ["billing_write.issue_refund", "billing_write.apply_credit"],
@@ -451,15 +370,15 @@ Register in `.claude/mcp_settings.json`:
 1. When is SSE transport appropriate instead of stdio?
 2. What does the namespace prefix `billing_write.*` communicate to an operator?
 3. What does the model receive when a tool handler throws an uncaught exception?
-4. What does `server_info` enable that the `mcp_settings.json` registration alone does not?
+4. What does `server_info` enable that `mcp_settings.json` registration alone does not?
 
 #### Try it
 
-Add a `billing_write.void_invoice` tool to the billing server with a four-part description emphasising this is irreversible. Restart the server and verify Claude Code discovers the new tool.
+Add a `billing_write.void_invoice` tool with a four-part description that emphasises it is irreversible. Restart the server and verify Claude Code discovers the new tool.
 
 #### Exam rule
 
-> `stdio` is the default for local MCP servers. `SSE` is for remote or multi-client servers. Namespace tools by capability (`billing_read.*`, `billing_write.*`). Tool handlers must never throw exceptions — return typed `access_failure` dicts. A `server_info` tool enables runtime capability discovery.
+> `stdio` is the default for local MCP servers. `SSE` is for remote or multi-client servers. Namespace tools by capability (`billing_read.*`, `billing_write.*`). Handlers must never throw exceptions — return typed `access_failure`. A `server_info` tool enables runtime capability discovery.
 
 ---
 
@@ -469,82 +388,55 @@ Add a `billing_write.void_invoice` tool to the billing server with a four-part d
 
 **Goal:** Know the five built-in tools by name, capability, and constraint — and know when a custom MCP tool is required instead.
 
-**Scenario:** Exam Scenario 4 (*Developer Productivity with Claude Code*) explicitly names all five built-in tools. Getting them wrong costs marks on every question in that scenario.
-
 #### The five tools
 
 ```
 Tool   Reads?  Writes?  Executes?  Notes
-────── ─────── ──────── ─────────  ─────────────────────────────────────────
+────── ─────── ──────── ─────────  ──────────────────────────────────────────
 Read   YES     no       no         Respects .claudeignore; local files only
 Write  no      YES      no         Creates parent dirs; does NOT git commit
 Bash   no      indirect YES        Prompts for confirmation on destructive cmds
 Grep   YES     no       no         Pattern search across file contents
-Glob   no      no       no         Returns file paths matching a pattern; no contents
+Glob   no      no       no         Returns file paths only — no contents
 ```
 
-**Availability:** Claude Code built-ins only. Not available in `client.messages.create()` or Agent SDK sessions unless explicitly registered.
+**Availability:** Claude Code sessions only. Not in `client.messages.create()` or Agent SDK sessions unless explicitly registered.
 
-**Trust model:** Built-in tools operate within Anthropic-defined safety constraints. `Bash` prompts on destructive commands. Custom MCP tools have **no** inherited safety constraints — the developer owns all validation.
+**Trust model:** Built-ins have Anthropic-defined safety constraints. Custom MCP tools have **no** inherited safety — you own all validation.
 
-#### The codebase exploration agent
-
-The exercise builds an agent that uses all five in sequence on the current directory:
+#### When to use each tool
 
 ```python
-# 1. Glob — find Python files
-Glob(pattern="**/*.py") → ["agents/coordinator.py", ...]
-
-# 2. Read — inspect a file
-Read(file_path="agents/coordinator.py") → file contents
-
-# 3. Grep — find usages of a function
-Grep(pattern="run_subagent", path=".") → [{file, line, content}, ...]
-
-# 4. Bash — run tests
-Bash(command="python -m pytest evals/ -q") → "1 passed in 0.3s"
-
-# 5. Write — save report
-Write(file_path="exploration_report.txt", content="...") → file created
+Glob("**/*.py")         # find files by path pattern
+Read("agents/main.py")  # read a specific file you already know
+Grep("run_subagent")    # find where a symbol appears across files
+Bash("pytest -q")       # run tests, git status — things the other tools can't do
+Write("report.txt", "…")# save output to a file
 ```
 
 #### Tasks that require a custom MCP tool
 
-| Task | Why built-ins fail | Solution |
-|------|--------------------|----------|
-| Read from private S3 | `Read` only accesses local filesystem | Custom MCP: `s3_read(bucket, key)` |
-| Query internal database | `Bash` cannot safely manage credentials | Custom MCP: `db_query(sql)` |
-| Call authenticated internal API | `Bash` embeds credentials in command string (visible in logs) | Custom MCP: `internal_api_call(endpoint, method, body)` |
-| Read a `.claudeignore`'d file | `Read` respects `.claudeignore` | Custom MCP tool with explicit file access |
+| Task | Why built-ins fail |
+|------|-------------------|
+| Read from private S3 | `Read` only accesses local filesystem |
+| Query a database | `Bash` can't safely manage credentials |
+| Call authenticated internal API | `Bash` embeds tokens in command strings (visible in logs) |
+| Read a `.claudeignore`'d file | `Read` respects `.claudeignore` |
 
 #### The naming conflict rule
 
 ```python
-# Never name a custom tool the same as a built-in
+# WRONG — overrides the built-in Read silently
 custom_tools = [{"name": "Read", "description": "Reads from our internal API..."}]
+# Claude Code now calls your custom "Read" when it needs to read a file → silent failure
 
-# Claude Code now uses your custom "Read" when it needs to read a file.
-# It calls: Read(file_path="/etc/config.yaml")
-# Your API handler receives file_path as an API endpoint → silent failure.
-
-# Fix: use distinct names — "crm_read", "s3_read", "db_read"
+# CORRECT — use distinct names
+custom_tools = [{"name": "crm_read", ...}]  # or s3_read, db_read
 ```
 
-#### Exam questions for Scenario 4
+#### What to observe
 
-```
-Q: An agent needs to read from a private S3 bucket. Which tool?
-A: Custom MCP tool — Read only accesses the local filesystem.
-
-Q: An agent needs to find all TypeScript files in a repo. Which tool?
-A: Glob with pattern **/*.ts
-
-Q: An agent runs: Bash("rm -rf ./temp"). What does Claude Code do?
-A: Prompts for confirmation. Custom MCP tools do NOT inherit this behaviour.
-
-Q: Are the five built-in tools available in client.messages.create()?
-A: No — Claude Code session tools only.
-```
+Run the script. An agent uses Glob to find Python files, then Grep to identify which ones import `anthropic`. Watch the tool call sequence printed during the agentic loop.
 
 #### Questions to answer before moving on
 
@@ -556,11 +448,11 @@ A: No — Claude Code session tools only.
 
 #### Try it
 
-Add a simulated `s3_read(bucket, key)` tool alongside the five built-ins. Ask the agent: "Find all Python files locally, then also read s3://my-bucket/config.yaml." Verify the agent uses `Glob` for local files and `s3_read` for S3 — not `Read` for the S3 path.
+Add a simulated `s3_read(bucket, key)` tool alongside the five built-ins. Ask the agent to find local Python files and also read `s3://my-bucket/config.yaml`. Verify it uses `Glob` for local files and `s3_read` for S3 — not `Read` for the S3 path.
 
 #### Exam rule
 
-> The five Claude Code built-in tools are **Read, Write, Bash, Grep, Glob**. They are available in Claude Code sessions only — not in direct API calls. `Bash` prompts on destructive commands; custom MCP tools have no inherited safety constraints. Never name a custom tool with the same name as a built-in. When a task requires external authentication or access to `.claudeignore`'d files, a custom MCP tool is required.
+> The five Claude Code built-in tools are **Read, Write, Bash, Grep, Glob**. Available in Claude Code sessions only — not in direct API calls. `Bash` prompts on destructive commands; custom MCP tools do not inherit this. Never name a custom tool the same as a built-in. When a task requires external authentication or access to `.claudeignore`'d files, use a custom MCP tool.
 
 ---
 
@@ -572,27 +464,26 @@ Before moving to Week 7, answer these without looking:
 - [ ] Name the three response shapes and what the model does for each
 - [ ] What does `stdio` transport mean? When would you use `SSE` instead?
 - [ ] Where does Claude Code look for MCP server configuration?
-- [ ] Why is a thrown exception a worse tool error than a typed `access_failure` response?
+- [ ] Why is a thrown exception worse than a typed `access_failure` response?
 - [ ] Name the five Claude Code built-in tools and one sentence on what each does
-- [ ] Name two tasks from Scenario 4 that require a custom MCP tool rather than a built-in
-- [ ] What happens when a custom tool is defined with the same name as a built-in?
+- [ ] Name two tasks that require a custom MCP tool rather than a built-in
 
 ---
 
 ## Exam Connections
 
-| Exercise | Domain | Exam Pattern Covered |
+| Exercise | Domain | Pattern Covered |
 |---|---|---|
 | 1 | D4 | Tool description quality; four-part template; description vs. hook as guardrail |
 | 2 | D4 | Three-response-shape pattern; `status` field routing; `{}` failure mode |
-| 3 | D4 | MCP server with `stdio` transport; tool discovery; capability boundaries |
-| 4 | D4 | SSE vs stdio; read/write namespace separation; `server_info` discovery; no-exception rule |
-| 5 | D4 | Five built-in tools; availability boundary; naming conflicts; custom MCP requirements |
+| 3 | D4 | MCP server with `stdio`; tool discovery; capability boundaries; boundary effect |
+| 4 | D4 | SSE vs stdio; read/write namespacing; no-exception rule; `server_info` discovery |
+| 5 | D4 | Five built-in tools; availability boundary; naming conflicts; custom MCP use cases |
 
 ---
 
 ## What's Next
 
-Week 7 covers the final domain — context management and reliability. The Chapter 5 incident (the agent that forgot its commitments) is fully reproducible in about 30 lines. These exercises build every layer of the fix.
+Week 7 covers context management and reliability. The Chapter 5 incident (the agent that forgot its commitments) is fully reproducible in about 30 lines. These exercises build every layer of the fix.
 
 → **[Week 7 Lab — Context Management & Reliability](../week-7-context-management/README.md)**
