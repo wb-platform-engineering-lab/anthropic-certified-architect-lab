@@ -1,23 +1,19 @@
 # Week 7 Lab — Context Management & Reliability
 
-> **Resolve context:** The agent that told a customer their refund was processing, then fifteen messages later asked for the information to start the refund — that was a context positioning failure. The system prompt was correct. The account data was in the history. The model had simply stopped attending to things said too far back. These exercises make that failure reproducible, measurable, and fixable.
+> **Resolve context:** The agent told a customer their refund was processing, then fifteen messages later asked for the information to start the refund. That was a context positioning failure. The system prompt was correct. The account data was in the history. The model had simply stopped attending to information said too far back. These exercises make that failure reproducible and fixable.
 
 ## Learning Objectives
 
 - Understand why context positioning matters — not just what fits in the window, but what the model attends to
-- Implement a pinning pattern for critical facts that must survive long conversations
-- Apply progressive summarisation correctly and understand the specific risks of doing it wrong
-- Design escalation triggers based on context health, not sentiment
+- Implement the pinning pattern for critical facts that must survive long conversations
+- Apply progressive summarisation correctly and understand what naive summarisation loses
 - Build error propagation handling in multi-agent chains so a failure at step 3 does not silently corrupt steps 4 and 5
-- Implement information provenance tracking so every fact can be traced to its source
+- Implement escalation triggers based on context health, not sentiment
 
 ## Prerequisites
 
-- Weeks 2–3 completed — context management failures appear at the intersection of long conversations and agentic loops
-- Anthropic SDK installed (`pip install anthropic` / `npm install @anthropic-ai/sdk`)
+- Anthropic SDK installed (`pip install anthropic python-dotenv`)
 - `.env` with `ANTHROPIC_API_KEY`
-
-**Languages:** Each exercise is implemented in both Python (`exercise_N.py`) and TypeScript (`exercise_N.ts`).
 
 ---
 
@@ -25,85 +21,341 @@
 
 ### Exercise 1 — Reproducing the Context Drift Failure
 
-**Goal:** Deliberately reproduce the Chapter 5 failure — a model contradicting itself in a long conversation — and verify you understand exactly what causes it.
+**File:** `exercise_1_context_drift.py`
 
-**Scenario:** The Chapter 5 agent contradicted itself by turn 30. Before you can fix it, you need to be able to reproduce it reliably. This exercise builds the minimal reproduction case: a long conversation where a critical fact established early is contradicted later.
+**Goal:** Deliberately reproduce the Chapter 5 failure — a critical fact established early in a conversation is "forgotten" later — and understand exactly what causes it.
 
-**You will:**
-1. Build a 40-turn synthetic conversation where turn 3 establishes a critical fact (e.g., "refund approved, reference REF-2024-9182") and turn 35 asks a question that requires recalling it
-2. Run the conversation without any context management — observe whether and when the model loses the fact
-3. Measure the "attention decay" by varying when the critical fact is established: turns 3, 10, 20, and 30 — at which point does the model reliably recall it vs. lose it?
-4. Confirm that the problem is not the context window (the fact is always within the window) but attention — the model is not actively attending to information buried in the middle of a long history
+#### Context window ≠ attention window
 
-**Key insight:** Context window ≠ attention window. A fact can be within the token limit and still be effectively invisible if it is positioned where the model's attention decays. The exam tests whether you know the difference.
+A fact can be within the token limit and still be effectively invisible if it is positioned where the model's attention decays. The model attends most strongly to:
+1. The beginning (system prompt and early turns)
+2. The most recent messages
+
+Middle turns are the danger zone.
+
+#### The experiment
+
+The script builds a conversation where a critical fact is established, then buried by filler exchanges, then recalled:
+
+```python
+# Turn 0: critical fact established
+user:      "Has my refund been approved?"
+assistant: "Yes, €450 approved. Reference REF-2024-9182. Allow 3–5 days."
+
+# Turns 1–10: filler exchanges (bury the fact)
+user:      "Is support available 24/7?"
+assistant: "Yes, 24/7."
+# ... repeat 9 more times
+
+# Final turn: recall question
+user:      "I need to follow up with my bank. What is my refund reference and amount?"
+```
+
+The fact is tested at four positions (0, 3, 7, 10 filler exchanges before the recall question) to show how attention decays as the fact moves further from both ends.
+
+#### What to observe
+
+Run the script. Early positions (fact at position 0 or 3) should recall both the reference number and amount. Later positions (fact at 7 or 10) may fail to recall one or both. This is not a prompt quality issue — it is a structural attention issue.
+
+#### Questions to answer before moving on
+
+1. Why does a fact within the context window sometimes get "forgotten"?
+2. Which positions in a long conversation receive the most model attention?
+3. Is this a problem that can be solved by making the system prompt longer?
+
+#### Try it
+
+Change `TOTAL_FILLER` to 5 and re-run. Does recall improve? Then increase to 20. At what depth does the model reliably fail?
+
+#### Exam rule
+
+> **Context window ≠ attention window.** A fact can be within the token limit and still be effectively invisible if buried in the middle of a long conversation. The model attends most strongly to the beginning and the most recent messages. Middle turns are the danger zone.
 
 ---
 
 ### Exercise 2 — The Pinning Pattern
 
-**Goal:** Implement the ACTIVE CONTEXT block pattern that prevents critical facts from being lost in long conversations.
+**File:** `exercise_2_pinning.py`
 
-**Scenario:** Resolve's fix for Chapter 5 was to extract critical facts after every turn and write them into a structured block immediately after the system prompt. The block is not appended to — it is overwritten at each turn with the current ground truth. It is always at the top of the conversation, always fresh, always visible.
+**Goal:** Fix the context drift failure by extracting critical facts and pinning them to the beginning of the conversation.
 
-**You will:**
-1. Define what qualifies as a "critical fact" for a ticket conversation: commitments made, amounts confirmed, refund reference numbers, account tier, any fact that, if forgotten, would cause a contradiction
-2. Implement `extract_critical_facts(message_history) → CriticalFacts` — a function that calls the API to extract facts from the current conversation and returns a structured object
-3. Implement the ACTIVE CONTEXT block: a fixed-position section in the message history that is rebuilt from `CriticalFacts` at every turn
-4. Re-run the 40-turn conversation from Exercise 1 with pinning enabled — verify the model recalls the critical fact at turn 35
-5. Verify that the ACTIVE CONTEXT block is always placed after the system prompt and before the conversation history — test what happens when it is placed at the end instead
+#### The ACTIVE CONTEXT block
 
-**Key insight:** The ACTIVE CONTEXT block works because it is always at the beginning of the conversation, right after the system prompt — where attention is highest. Placing it at the end of the history, where it is more "recent," is actually worse because the model may treat it as a new user message rather than established ground truth.
+```
+[System prompt]
+[ACTIVE CONTEXT — ground truth for this ticket]
+  Refund reference: REF-2024-9182
+  Refund amount:    €450
+  Commitment: Refund processing in 3–5 business days
+[END ACTIVE CONTEXT]
+[Conversation history...]
+[Current user message]
+```
+
+The block is:
+- Always placed **after the system prompt** — where attention is highest
+- **Overwritten at each turn** with the current ground truth (not appended to)
+- Formatted as a first-class user message so the model treats it as established context
+
+#### Why placing it at the END is worse
+
+Even though a message at the end of the history is more "recent," placing the ACTIVE CONTEXT there causes two problems:
+- The model may treat it as a new user instruction rather than established ground truth
+- It competes with the actual user message for the model's final-turn attention
+
+#### The implementation
+
+```python
+# Step 1: extract critical facts from the conversation
+facts = extract_critical_facts(messages)
+# → {"refund_reference": "REF-2024-9182", "refund_amount": 450.0,
+#    "commitments": ["Refund processing in 3–5 business days"]}
+
+# Step 2: build the ACTIVE CONTEXT block
+active_context = build_active_context_block(facts)
+
+# Step 3: inject at the top of the message history
+pinned_messages = [
+    {"role": "user",      "content": active_context},
+    {"role": "assistant", "content": "Understood. I have noted these facts."},
+] + messages
+```
+
+#### What to observe
+
+Run the script. Both approaches use the same 10-filler conversation from Exercise 1. Without pinning, the model may fail to recall the reference or amount. With pinning, both should be recalled correctly because the facts are injected at the position of highest attention.
+
+#### Questions to answer before moving on
+
+1. Where should the ACTIVE CONTEXT block be placed — before or after the conversation history? Why?
+2. Should the ACTIVE CONTEXT block be appended to or overwritten at each turn?
+3. Why does placing the block at the end of history fail?
+
+#### Try it
+
+Modify `ask_with_pinning()` to place the ACTIVE CONTEXT block at the END of the messages instead of the beginning. Does recall still work? This demonstrates position matters.
+
+#### Exam rule
+
+> The ACTIVE CONTEXT block extracts critical facts and pins them immediately after the system prompt — always at the position of highest attention. It is overwritten at each turn with the current ground truth. Placing it at the end of history is worse because the model treats it as a new user message rather than established context.
 
 ---
 
-### Exercise 3 — Progressive Summarisation: When and How
+### Exercise 3 — Progressive Summarisation
 
-**Goal:** Implement conversation summarisation correctly and understand the specific failure modes that make naive summarisation dangerous.
+**File:** `exercise_3_summarisation.py`
 
-**Scenario:** Resolve's early summarisation strategy compressed the first 30 turns of a ticket into a paragraph to save tokens. It worked for most tickets. For billing disputes, it silently lost the specific invoice numbers and amounts, replacing them with "billing issue discussed." The agent then made up plausible-sounding invoice numbers when asked.
+**Goal:** Understand what naive summarisation loses — and implement commitment-preserving summarisation that keeps specific facts intact.
 
-**You will:**
-1. Implement naive summarisation: compress the oldest 20 turns into a single paragraph using a model call
-2. Run the summarised conversation through 10 more turns and identify which facts survived compression and which were lost
-3. Implement commitment-preserving summarisation: before compressing, extract all commitments (amounts, reference numbers, deadlines, promises) into a structured list — these are never compressed, only the surrounding context is
-4. Define a "safe to compress" heuristic: greetings, acknowledgements, and procedural exchanges are safe; any turn containing a number, a date, a reference code, or a specific claim is not
-5. Implement a compression depth counter: track how many times the conversation has been compressed and flag for human review after two compressions
+#### The problem with naive summarisation
 
-**Key insight:** Summarisation always loses information — the question is whether it loses the *right* information. A commitment expressed as "refund approved for €450 by REF-9182" must survive intact. "The customer expressed frustration" can be discarded.
+```
+Before compression:
+  "Your refund of €89 has been approved. Reference REF-2026-0088."
+
+After naive compression:
+  "Billing issue discussed."
+
+Agent response when asked for reference:
+  "Your reference number is REF-2026-0099."   ← made up
+```
+
+Naive summarisation replaces specific facts with vague summaries. The model then fills in plausible-sounding replacements.
+
+#### Commitment-preserving summarisation
+
+```python
+# Step 1: extract commitments verbatim BEFORE compressing
+commitments = extract_commitments(messages)
+# → ["Duplicate charge: INV-2026-0442 for €89",
+#    "Refund approved: €89, reference REF-2026-0088",
+#    "Confirmation email promised within 1 hour"]
+
+# Step 2: summarise only the context (not the commitments)
+context_summary = summarise_context_only(messages)
+# → "Customer reported a duplicate charge and a refund was processed."
+
+# Step 3: the commitments are NEVER compressed — kept verbatim
+```
+
+#### What to survive compression
+
+| Safe to compress | Never compress |
+|---|---|
+| Greetings, acknowledgements | Reference numbers (INV-*, REF-*) |
+| Procedural exchanges | Amounts (€89, $450) |
+| Emotional expressions | Dates and deadlines |
+| Repeat clarifications | Specific promises |
+
+#### What to observe
+
+Run the script on the sample 12-turn conversation. Naive summarisation will lose the invoice number, refund amount, and reference code. Commitment-preserving summarisation will keep all three in the extracted commitments list.
+
+#### Questions to answer before moving on
+
+1. What does naive summarisation replace specific facts with?
+2. Name two types of information that should never be compressed.
+3. Why does the model make up plausible-sounding replacements after summarisation?
+
+#### Try it
+
+Add a 5th commitment to the sample conversation: `"Enterprise discount of 15% applied to next invoice."` Re-run and verify it survives commitment-preserving summarisation but is lost in naive summarisation.
+
+#### Exam rule
+
+> Summarisation always loses information — the question is whether it loses the *right* information. Commitments (amounts, reference numbers, deadlines, promises) must survive intact. Extract them verbatim before compressing. Naive summarisation replaces them with vague summaries and the model fills in plausible-sounding fabrications.
 
 ---
 
 ### Exercise 4 — Error Propagation in Multi-Agent Chains
 
-**Goal:** Understand how a failure at one step in a multi-agent chain can silently corrupt subsequent steps — and implement explicit error propagation that prevents this.
+**File:** `exercise_4_error_propagation.py`
 
-**Scenario:** Resolve's pipeline processes tickets through five agents in sequence. When the third agent (incident lookup) fails, it returns `{}` from an earlier version of the code — before the Chapter 4 fix was applied everywhere. The fourth agent (billing check) receives a context that includes the empty incident lookup and proceeds as if incidents were checked and nothing was found. The fifth agent drafts a response that ignores an active incident.
+**Goal:** Show that a failure at one pipeline step must abort downstream steps — not let them proceed with corrupted input.
 
-**You will:**
-1. Build a five-step pipeline where each step appends its result to a shared context object
-2. Simulate a failure at step 3 — return a typed `{status: "failed", step: "incident_lookup", reason: "timeout"}` instead of an empty result
-3. Implement a context health check at the start of each step: before running, the agent checks whether any previous step in the context object has `status: "failed"` — if so, it aborts and propagates the failure rather than proceeding with incomplete information
-4. Verify that a failure at step 3 causes steps 4 and 5 to abort with a typed failure — not to run with corrupted input
-5. Implement a partial-success policy: some steps are optional (incident lookup) and their failure should not block the pipeline — define which steps are required vs. optional in a pipeline config
+#### The pipeline
 
-**Key insight:** Error propagation in a multi-agent chain is not about catching exceptions — it is about making every step aware of the health of the context it receives. A step that proceeds with a failed predecessor's output is worse than a step that aborts, because it generates confident-sounding incorrect output.
+```
+Step 1: account_lookup   (required)
+Step 2: billing_lookup   (required)
+Step 3: incident_lookup  (optional — failure is tolerated)
+Step 4: classify_ticket  (required)
+Step 5: draft_reply      (required)
+```
+
+#### The bug — proceeding with corrupted context
+
+```python
+# Step 3 fails (incident API timeout) — returns {} with old code
+# Step 4 sees: {"account": {...}, "billing": {...}, "incidents": {}}
+# Step 4 treats {} as "no incidents found" and proceeds
+# Step 5 drafts a reply that ignores an active incident
+```
+
+The step that proceeds with a failed predecessor's output is **worse** than a step that aborts — it generates confident-sounding incorrect output.
+
+#### The fix — context health check before each step
+
+```python
+def check_context_health(context: dict) -> Optional[str]:
+    for step_config in PIPELINE_STEPS:
+        step_name = step_config["name"]
+        if step_name not in context:
+            continue
+        result = context[step_name]
+        if result.get("status") == "failed" and step_config["required"]:
+            return f"Required step '{step_name}' failed: {result.get('reason')}"
+    return None
+
+# Before each step:
+health_error = check_context_health(context)
+if health_error:
+    context[step_name] = {"status": "aborted", "reason": health_error}
+    continue  # skip this step
+```
+
+#### Required vs optional steps
+
+```python
+PIPELINE_STEPS = [
+    {"name": "account_lookup",  "required": True},   # fails → all downstream abort
+    {"name": "billing_lookup",  "required": True},
+    {"name": "incident_lookup", "required": False},  # fails → pipeline continues
+    {"name": "classify_ticket", "required": True},
+    {"name": "draft_reply",     "required": True},
+]
+```
+
+#### What to observe
+
+Three scenarios:
+- **No failures**: all 5 steps succeed, final reply is generated
+- **Required step fails** (billing_lookup): steps 3–5 are aborted, no reply generated
+- **Optional step fails** (incident_lookup): steps 4–5 continue, reply is generated with available context
+
+#### Questions to answer before moving on
+
+1. Why is proceeding with a failed step's output worse than aborting?
+2. What distinguishes a required step from an optional step in the pipeline config?
+3. Where does the context health check run — before or after the step executes?
+
+#### Try it
+
+Change `incident_lookup` to `required: True` in `PIPELINE_STEPS`. Re-run Scenario C. Does the pipeline now abort when incident lookup fails?
+
+#### Exam rule
+
+> A step that proceeds with a failed predecessor's output generates confident-sounding incorrect output. The context health check runs **before** each step. Required step failure → all downstream steps abort. Optional step failure → pipeline continues, step is skipped.
 
 ---
 
 ### Exercise 5 — Context Health as an Escalation Trigger
 
-**Goal:** Implement escalation triggers based on context health metrics — compression depth, ambiguity score, provenance gaps — not sentiment.
+**File:** `exercise_5_context_health.py`
 
-**Scenario:** Resolve's enterprise SLA requires that tickets with uncertain context are reviewed by a human before a resolution is sent. The original trigger was sentiment-based: if the customer sounded frustrated, escalate. The new trigger is context-based: if the context has been compressed more than twice, or if critical facts have low provenance confidence, escalate regardless of tone.
+**Goal:** Replace sentiment-based escalation with context-health-based escalation that is auditable and consistent.
 
-**You will:**
-1. Define a `ContextHealthReport` with three metrics: `compression_depth` (int), `provenance_gaps` (list of facts whose source turn cannot be identified), and `contradiction_count` (facts that appear to conflict with each other in the history)
-2. Implement `assess_context_health(message_history, critical_facts) → ContextHealthReport` using a model call to identify provenance gaps and contradictions
-3. Define three escalation thresholds: `compression_depth > 2`, `len(provenance_gaps) > 0` for billing facts, `contradiction_count > 0` for any confirmed commitment
-4. Run the same 10 tickets through both the sentiment-based and health-based escalation triggers — compare escalation rates and identify where they diverge
-5. Add a provenance annotation to every critical fact: `{fact: "refund approved", source_turn: 12, confidence: "high"}` — use this to build the provenance gaps list
+#### The two escalation approaches
 
-**Key insight:** Context health escalation is auditable. You can show a client exactly why a ticket was escalated: "this conversation was compressed twice and the invoice amount appears in turns 8 and 31 with different values." Sentiment-based escalation cannot be explained this way.
+**Sentiment-based:** escalate if the customer sounds frustrated or angry.
+
+**Context-based:** escalate if the context itself is unreliable — regardless of tone.
+
+#### Context health metrics
+
+```python
+{
+    "compression_depth": 3,         # how many times the conversation was summarised
+    "provenance_gaps": [            # facts whose source cannot be identified
+        "refund amount mentioned but source turn unclear"
+    ],
+    "contradictions": [             # facts that conflict with each other
+        "refund amount: €89 in turn 3, €120 in turn 7"
+    ],
+    "sentiment": "calm",            # customer tone (used only for sentiment trigger)
+}
+```
+
+#### Escalation thresholds
+
+```python
+def should_escalate_by_context(report: dict) -> dict:
+    if report["compression_depth"] > 2:
+        return {"escalate": True, "reason": "Compressed more than twice."}
+    if report["provenance_gaps"]:
+        return {"escalate": True, "reason": f"Provenance gaps: {report['provenance_gaps']}"}
+    if report["contradictions"]:
+        return {"escalate": True, "reason": f"Contradictions: {report['contradictions']}"}
+    return {"escalate": False, "reason": "Context is healthy."}
+```
+
+#### Three test cases
+
+| Ticket | Sentiment | Context health | Sentiment trigger | Context trigger |
+|---|---|---|---|---|
+| Frustrated, clean context | angry | no issues | escalate | do not escalate |
+| Calm, contradicted context | calm | contradictions | do not escalate | escalate |
+| Compressed 3 times | neutral | depth > 2 | do not escalate | escalate |
+
+The two approaches diverge on every test case.
+
+#### What to observe
+
+Run the script. For each test case, compare `sentiment trigger` vs `context trigger`. The frustrated-but-clean-context ticket shows the clearest divergence: the old approach wastes an escalation on a customer who is merely impatient, while the calm-but-contradicted ticket would be silently sent an incorrect reply.
+
+#### Questions to answer before moving on
+
+1. Name the three context health metrics.
+2. Why is context-based escalation more auditable than sentiment-based?
+3. A customer is angry but the context health report shows no gaps or contradictions. Which trigger should fire?
+
+#### Try it
+
+Add a fourth test case: a ticket that has both high compression depth AND an angry customer. Do both triggers fire? Does it matter which one fires first?
+
+#### Exam rule
+
+> Context health escalation is auditable: you can explain exactly why a ticket was escalated ("compressed 3 times, refund amount appears with conflicting values"). Sentiment escalation cannot be explained this way. A frustrated customer with clean context does not need escalation. A calm customer with contradicted context does.
 
 ---
 
@@ -111,24 +363,24 @@
 
 Before moving to Week 8, answer these without looking:
 
-- [ ] Why does a critical fact within the context window sometimes still get "forgotten" by the model?
-- [ ] Where should the ACTIVE CONTEXT block be placed relative to the system prompt and conversation history?
-- [ ] Name two categories of information that should never be compressed in a summarisation step
-- [ ] What does "compression depth" measure and why is it an escalation signal?
-- [ ] What is the difference between an error that propagates (cascades) and one that short-circuits (stops the chain)?
-- [ ] Write a `ContextHealthReport` with three fields from memory and define the escalation threshold for each
+- [ ] Why does a critical fact within the context window sometimes still get "forgotten"?
+- [ ] Where should the ACTIVE CONTEXT block be placed — before or after the conversation history?
+- [ ] Should the ACTIVE CONTEXT block be appended to or overwritten at each turn?
+- [ ] Name two types of information that should never be summarised away
+- [ ] What happens downstream when a required step in a multi-agent pipeline fails?
+- [ ] Name the three context health metrics and the escalation threshold for each
 
 ---
 
 ## Exam Connections
 
-| Exercise | Domain | Exam Pattern Covered |
+| Exercise | Domain | Pattern Covered |
 |---|---|---|
-| 1 | D5 | Context window vs. attention window; reproducing drift failure |
+| 1 | D5 | Context window vs. attention window; reproducing drift |
 | 2 | D5 | ACTIVE CONTEXT pinning pattern; position matters |
-| 3 | D5 | Progressive summarisation; commitment preservation; compression depth |
-| 4 | D1, D5 | Error propagation in multi-agent chains; context health checks |
-| 5 | D5 | Context health as escalation trigger; provenance tracking; auditable escalation |
+| 3 | D5 | Progressive summarisation; commitment preservation |
+| 4 | D1, D5 | Error propagation in multi-agent chains; health check before each step |
+| 5 | D5 | Context health vs. sentiment escalation; auditable triggers |
 
 ---
 
